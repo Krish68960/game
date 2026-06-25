@@ -5,7 +5,6 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-
 const io = new Server(server, { 
     cors: { origin: "*", methods: ["GET", "POST"] },
     transports: ['websocket', 'polling'] 
@@ -15,13 +14,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => { res.sendFile(path.join(__dirname, 'public', 'index.html')); });
 
 const MAZE_SIZE = 15; 
-const CELL_SIZE = 100; 
-const MAP_SIZE = MAZE_SIZE * CELL_SIZE; 
+const CELL_SIZE = 100;
 let players = {};
 let bullets = [];
 
-// NEW: Generates a high-flow Braided Arena Maze (breaks dead ends to allow maximum bot movement)
-function generateArenaMaze(size) {
+// Generates an Open-Braided Grid Map layout
+function generateArenaGrid(size) {
     let grid = Array(size).fill(null).map(() => Array(size).fill(null).map(() => ({ n: true, s: true, e: true, w: true })));
     let visited = Array(size).fill(null).map(() => Array(size).fill(false));
     
@@ -39,62 +37,26 @@ function generateArenaMaze(size) {
     }
     dfs(0, 0);
 
-    // BRAIDING PROCESS: Permanently tear down 40% of the walls to create open corridors and loop circuits
+    // Tear down 50% of inner grid walls to completely prevent bottlenecks and clustering locks
     for (let r = 1; r < size - 1; r++) {
         for (let c = 1; c < size - 1; c++) {
-            if (Math.random() < 0.40) {
-                grid[r][c].n = false; grid[r-1][c].s = false;
-                grid[r][c].w = false; grid[r][c-1].e = false;
-            }
+            if (Math.random() < 0.5) { grid[r][c].n = false; grid[r-1][c].s = false; }
+            if (Math.random() < 0.5) { grid[r][c].w = false; grid[r][c-1].e = false; }
         }
     }
     return grid;
 }
-const maze = generateArenaMaze(MAZE_SIZE);
+const maze = generateArenaGrid(MAZE_SIZE);
 
-const namesList = ["Sniper", "Viper", "Slayer", "Phoenix", "Titan", "Specter", "Reaper", "Alpha", "Omega", "Hunter", "Rogue", "Blaze", "Frost", "Wolf", "Ninja", "Kratos", "Zeus", "Hazard", "Cipher", "Bullet", "Ghost", "Shadow"];
-
+const namesList = ["Sniper", "Viper", "Slayer", "Phoenix", "Titan", "Specter", "Reaper", "Hunter", "Rogue", "Blaze", "Frost", "Wolf", "Ghost", "Shadow", "Apex", "Kratos"];
 function getRandomName(prefix = "") {
     return `${prefix}${namesList[Math.floor(Math.random() * namesList.length)]}#${Math.floor(1000 + Math.random() * 9000)}`;
 }
 
-function getGridCenteredSpawn() {
+function getRandomCellCenter() {
     let r = Math.floor(Math.random() * MAZE_SIZE);
     let c = Math.floor(Math.random() * MAZE_SIZE);
-    return { x: (c * CELL_SIZE) + 50, y: (r * CELL_SIZE) + 50 };
-}
-
-// ULTRA LIGHTWEIGHT COLLISION: Lowered radius to 8px so bots never get clipped or squeezed by narrow corners
-function checkWallCollision(x, y, radius = 8) {
-    if (x - radius < 4 || x + radius > MAP_SIZE - 4 || y - radius < 4 || y + radius > MAP_SIZE - 4) return true;
-
-    let cellX = Math.floor(x / CELL_SIZE);
-    let cellY = Math.floor(y / CELL_SIZE);
-    
-    if (cellX < 0 || cellX >= MAZE_SIZE || cellY < 0 || cellY >= MAZE_SIZE) return true;
-    let cell = maze[cellY][cellX];
-
-    let cellLeft = cellX * CELL_SIZE;
-    let cellRight = cellLeft + CELL_SIZE;
-    let cellTop = cellY * CELL_SIZE;
-    let cellBottom = cellTop + CELL_SIZE;
-
-    if (cell.w && (x - radius) < (cellLeft + 2)) return true;
-    if (cell.e && (x + radius) > (cellRight - 2)) return true;
-    if (cell.n && (y - radius) < (cellTop + 2)) return true;
-    if (cell.s && (y + radius) > (cellBottom - 2)) return true;
-
-    return false;
-}
-
-function hasLineOfSight(x0, y0, x1, y1) {
-    let dist = Math.hypot(x1 - x0, y1 - y0);
-    let steps = Math.ceil(dist / 25); 
-    for (let i = 1; i < steps; i++) {
-        let t = i / steps;
-        if (checkWallCollision(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, 4)) return false;
-    }
-    return true;
+    return { x: c * CELL_SIZE + 50, y: r * CELL_SIZE + 50 };
 }
 
 function initBots() {
@@ -102,53 +64,74 @@ function initBots() {
     for (let i = 0; i < 25; i++) {
         const isHard = i >= 20; 
         const botId = `bot_${i}_${Date.now()}`;
-        const spawn = getGridCenteredSpawn();
-        const targetWaypoint = getGridCenteredSpawn();
+        const spawn = getRandomCellCenter();
         
         players[botId] = {
             id: botId,
             name: getRandomName(isHard ? "ULTRA_" : ""),
-            x: spawn.x,
-            y: spawn.y,
+            x: spawn.x, y: spawn.y,
             angle: Math.random() * Math.PI * 2,
-            health: 5,
-            isBot: true,
-            isHard: isHard,
-            lastShot: 0,
-            targetX: targetWaypoint.x,
-            targetY: targetWaypoint.y,
-            stuckTimer: 0
+            health: 5, isBot: true, isHard: isHard, lastShot: 0,
+            vx: 0, vy: 0
         };
     }
 }
 initBots();
 
+// Master Matrix Wall Engine: Evaluates position changes deterministically via tile maps
+function isWallBlocking(x, y, dx, dy) {
+    let c = Math.floor(x / CELL_SIZE);
+    let r = Math.floor(y / CELL_SIZE);
+    if (c < 0 || c >= MAZE_SIZE || r < 0 || r >= MAZE_SIZE) return true;
+    
+    let cell = maze[r][c];
+    if (dx > 0 && cell.e && (x % CELL_SIZE) > 82) return true;
+    if (dx < 0 && cell.w && (x % CELL_SIZE) < 18) return true;
+    if (dy > 0 && cell.s && (y % CELL_SIZE) > 82) return true;
+    if (dy < 0 && cell.n && (y % CELL_SIZE) < 18) return true;
+    return false;
+}
+
+function hasLineOfSight(x0, y0, x1, y1) {
+    let dist = Math.hypot(x1 - x0, y1 - y0);
+    if (dist > 500) return false; // Max sight cap
+    let steps = Math.ceil(dist / 20); 
+    for (let i = 1; i < steps; i++) {
+        let t = i / steps;
+        let cx = x0 + (x1 - x0) * t;
+        let cy = y0 + (y1 - y0) * t;
+        if (isWallBlocking(cx, cy, 0, 0)) return false;
+    }
+    return true;
+}
+
 function updateGame() {
-    // Projectiles Processing Engine
+    // Projectiles Verification
     for (let i = bullets.length - 1; i >= 0; i--) {
         let b = bullets[i];
         b.x += Math.cos(b.angle) * b.speed;
         b.y += Math.sin(b.angle) * b.speed;
 
-        if (checkWallCollision(b.x, b.y, 3)) {
+        let bc = Math.floor(b.x / CELL_SIZE);
+        let br = Math.floor(b.y / CELL_SIZE);
+        
+        if (bc < 0 || bc >= MAZE_SIZE || br < 0 || br >= MAZE_SIZE || isWallBlocking(b.x, b.y, 0, 0)) {
             bullets.splice(i, 1);
             continue;
         }
 
         for (let pId in players) {
             let p = players[pId];
-            if (pId !== b.ownerId) {
-                if (Math.hypot(p.x - b.x, p.y - b.y) < 16) {
-                    p.health -= 1;
-                    bullets.splice(i, 1);
-                    if (p.health <= 0) { delete players[pId]; }
-                    break;
-                }
+            if (pId !== b.ownerId && Math.hypot(p.x - b.x, p.y - b.y) < 18) {
+                p.health -= 1;
+                bullets.splice(i, 1);
+                if (p.health <= 0) delete players[pId];
+                break;
             }
         }
     }
 
-    // HARDCORE INTELLIGENT BOT ENGINE
+    // BOT BEHAVIOR EXECUTION ENGINE
     let now = Date.now();
     for (let id in players) {
         let p = players[id];
@@ -163,63 +146,35 @@ function updateGame() {
             }
         }
 
-        // BUFFED STATS: Increased move speeds and laser speeds across all tiers
-        let speed = p.isHard ? 4.5 : 2.8; 
-        let detectionRange = p.isHard ? 700 : 400;
-        let fireCooldown = p.isHard ? 250 : 800; // Ultra bots shoot like an absolute machine gun
+        let speed = p.isHard ? 3.5 : 2.2;
+        let fireCooldown = p.isHard ? 300 : 900;
 
-        let targetVisible = false;
-        if (closestTarget && minDist < detectionRange) {
-            targetVisible = hasLineOfSight(p.x, p.y, closestTarget.x, closestTarget.y);
-        }
+        let targetVisible = closestTarget && hasLineOfSight(p.x, p.y, closestTarget.x, closestTarget.y);
 
-        if (closestTarget && targetVisible) {
-            // COMBAT PURSUIT SPRINT MODE
+        if (targetVisible) {
+            // COMBAT TRACKING ACTIVE MODE
             p.angle = Math.atan2(closestTarget.y - p.y, closestTarget.x - p.x);
-            
-            let moveX = Math.cos(p.angle) * speed;
-            let moveY = Math.sin(p.angle) * speed;
-            
-            // Ultra-responsive wall sliding physics configuration
-            if (!checkWallCollision(p.x + moveX, p.y, 8)) p.x += moveX;
-            if (!checkWallCollision(p.x, p.y + moveY, 8)) p.y += moveY;
+            p.vx = Math.cos(p.angle) * speed;
+            p.vy = Math.sin(p.angle) * speed;
 
             if (now - p.lastShot > fireCooldown) {
-                // Predictive Offset: Adds slight accuracy scaling to laser weapon discharges
-                let spread = (Math.random() - 0.5) * (p.isHard ? 0.05 : 0.15);
-                bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle + spread, speed: p.isHard ? 11 : 8.5 });
+                bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle + (Math.random() - 0.5) * 0.1, speed: 10 });
                 p.lastShot = now;
             }
         } else {
-            // HIGH-SPEED MAP SEARCH MODE
-            let distToWaypoint = Math.hypot(p.targetX - p.x, p.targetY - p.y);
-            
-            if (distToWaypoint < 30 || p.stuckTimer > 25) {
-                let nextNode = getGridCenteredSpawn();
-                p.targetX = nextNode.x;
-                p.targetY = nextNode.y;
-                p.stuckTimer = 0;
-            }
-
-            p.angle = Math.atan2(p.targetY - p.y, p.targetX - p.x);
-            let moveX = Math.cos(p.angle) * speed;
-            let moveY = Math.sin(p.angle) * speed;
-
-            let successX = false;
-            let successY = false;
-
-            if (!checkWallCollision(p.x + moveX, p.y, 8)) { p.x += moveX; successX = true; }
-            if (!checkWallCollision(p.x, p.y + moveY, 8)) { p.y += moveY; successY = true; }
-
-            if (!successX && !successY) {
-                p.stuckTimer++;
-                // Instant reflex pivot: Forces immediate alternate corridor redirection
-                p.angle += (Math.random() > 0.5 ? Math.PI / 2 : -Math.PI / 2);
-                let escapeNode = getGridCenteredSpawn();
-                p.targetX = escapeNode.x;
-                p.targetY = escapeNode.y;
+            // HIGH SPEED AUTONOMOUS CORRIDOR PATROLLING
+            if (Math.abs(p.vx) < 0.2 && Math.abs(p.vy) < 0.2 || Math.random() < 0.02) {
+                let randAngle = Math.floor(Math.random() * 4) * (Math.PI / 2); // Snaps perfectly to open corridors
+                p.vx = Math.cos(randAngle) * speed;
+                p.vy = Math.sin(randAngle) * speed;
             }
         }
+
+        // Apply Matrix Movement Verification Layer
+        if (!isWallBlocking(p.x + p.vx, p.y, p.vx, 0)) p.x += p.vx; else p.vx = -p.vx * 0.5;
+        if (!isWallBlocking(p.x, p.y + p.vy, 0, p.vy)) p.y += p.vy; else p.vy = -p.vy * 0.5;
+        
+        if (p.vx !== 0 || p.vy !== 0) p.angle = Math.atan2(p.vy, p.vx);
     }
 
     io.emit('gameState', { players, bullets });
@@ -228,7 +183,7 @@ function updateGame() {
 setInterval(updateGame, 1000 / 30);
 
 io.on('connection', (socket) => {
-    let spawn = getGridCenteredSpawn();
+    let spawn = getRandomCellCenter();
     players[socket.id] = { id: socket.id, name: getRandomName(), x: spawn.x, y: spawn.y, angle: 0, health: 5, isBot: false };
     socket.emit('init', { maze, size: MAZE_SIZE, cellSize: CELL_SIZE, id: socket.id });
 
@@ -236,10 +191,10 @@ io.on('connection', (socket) => {
         let p = players[socket.id];
         if (!p) return;
         p.angle = data.angle;
-        let moveX = Math.cos(p.angle) * data.speed;
-        let moveY = Math.sin(p.angle) * data.speed;
-        if (!checkWallCollision(p.x + moveX, p.y, 8)) p.x += moveX;
-        if (!checkWallCollision(p.x, p.y + moveY, 8)) p.y += moveY;
+        let mx = Math.cos(p.angle) * data.speed;
+        let my = Math.sin(p.angle) * data.speed;
+        if (!isWallBlocking(p.x + mx, p.y, mx, 0)) p.x += mx;
+        if (!isWallBlocking(p.x, p.y + my, 0, my)) p.y += my;
     });
 
     socket.on('shoot', () => {
@@ -251,5 +206,4 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => { delete players[socket.id]; });
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Hardcore Arena Engine Online on port ${PORT}`));
+server.listen(process.env.PORT || 3000);

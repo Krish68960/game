@@ -6,12 +6,8 @@ const path = require('path');
 const app = express();
 const server = http.createServer(app);
 
-// FIX: Relaxed CORS and absolute paths to prevent browser connection blocks
 const io = new Server(server, { 
-    cors: { 
-        origin: "*",
-        methods: ["GET", "POST"]
-    },
+    cors: { origin: "*", methods: ["GET", "POST"] },
     transports: ['websocket', 'polling'] 
 });
 
@@ -50,7 +46,10 @@ function getRandomName(prefix = "") {
 }
 
 function getValidSpawnPos() {
-    return { x: Math.random() * (MAP_SIZE - 60) + 30, y: Math.random() * (MAP_SIZE - 60) + 30 };
+    // Spawns them precisely in the center of random maze paths so they don't stick to walls on start
+    let r = Math.floor(Math.random() * MAZE_SIZE);
+    let c = Math.floor(Math.random() * MAZE_SIZE);
+    return { x: c * CELL_SIZE + CELL_SIZE / 2, y: r * CELL_SIZE + CELL_SIZE / 2 };
 }
 
 function initBots() {
@@ -73,26 +72,37 @@ function initBots() {
 }
 initBots();
 
-function checkWallCollision(x, y, radius = 15) {
+// FIXED: Mathematical alignment algorithm completely prevents players/bots from getting trapped in wall physics
+function checkWallCollision(x, y, radius = 12) {
+    if (x - radius < 0 || x + radius > MAP_SIZE || y - radius < 0 || y + radius > MAP_SIZE) return true;
+
     let cellX = Math.floor(x / CELL_SIZE);
     let cellY = Math.floor(y / CELL_SIZE);
+    
     if (cellX < 0 || cellX >= MAZE_SIZE || cellY < 0 || cellY >= MAZE_SIZE) return true;
     let cell = maze[cellY][cellX];
-    if (cell.w && x - radius < cellX * CELL_SIZE) return true;
-    if (cell.e && x + radius > (cellX + 1) * CELL_SIZE) return true;
-    if (cell.n && y - radius < cellY * CELL_SIZE) return true;
-    if (cell.s && y + radius > (cellY + 1) * CELL_SIZE) return true;
+
+    let leftBound = cellX * CELL_SIZE;
+    let rightBound = leftBound + CELL_SIZE;
+    let topBound = cellY * CELL_SIZE;
+    let bottomBound = topBound + CELL_SIZE;
+
+    if (cell.w && (x - radius) < leftBound) return true;
+    if (cell.e && (x + radius) > rightBound) return true;
+    if (cell.n && (y - radius) < topBound) return true;
+    if (cell.s && (y + radius) > bottomBound) return true;
+
     return false;
 }
 
 function updateGame() {
-    // Bullets Physics
+    // Projectile Engine
     for (let i = bullets.length - 1; i >= 0; i--) {
         let b = bullets[i];
         b.x += Math.cos(b.angle) * b.speed;
         b.y += Math.sin(b.angle) * b.speed;
 
-        if (checkWallCollision(b.x, b.y, 4) || b.x < 0 || b.x > MAP_SIZE || b.y < 0 || b.y > MAP_SIZE) {
+        if (checkWallCollision(b.x, b.y, 4)) {
             bullets.splice(i, 1);
             continue;
         }
@@ -110,7 +120,7 @@ function updateGame() {
         }
     }
 
-    // BOT AI LOOP
+    // BOT AI RUNTIME LOOP
     let now = Date.now();
     for (let id in players) {
         let p = players[id];
@@ -125,25 +135,37 @@ function updateGame() {
             }
         }
 
-        let speed = p.isHard ? 3.5 : 1.8; 
-        let detectionRange = p.isHard ? 500 : 250;
-        let fireCooldown = p.isHard ? 400 : 1300;
+        let speed = p.isHard ? 3.2 : 1.6; 
+        let detectionRange = p.isHard ? 600 : 300;
+        let fireCooldown = p.isHard ? 450 : 1400;
 
         if (closestTarget && minDist < detectionRange) {
             p.angle = Math.atan2(closestTarget.y - p.y, closestTarget.x - p.x);
+            
             let nextX = p.x + Math.cos(p.angle) * speed;
             let nextY = p.y + Math.sin(p.angle) * speed;
-            if (!checkWallCollision(nextX, nextY)) { p.x = nextX; p.y = nextY; }
+            
+            // If path forward is clear, step forward. If wall detected, pivot angle to slide past corners cleanly
+            if (!checkWallCollision(nextX, nextY)) {
+                p.x = nextX; p.y = nextY;
+            } else {
+                p.angle += (Math.random() > 0.5 ? 1 : -1) * 0.5;
+            }
 
             if (now - p.lastShot > fireCooldown) {
                 bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle, speed: p.isHard ? 8.5 : 6 });
                 p.lastShot = now;
             }
         } else {
-            if (Math.random() < 0.03) p.angle += (Math.random() - 0.5) * 2;
+            // Natural exploration wandering routine
+            if (Math.random() < 0.05) p.angle += (Math.random() - 0.5) * 2;
             let nextX = p.x + Math.cos(p.angle) * speed;
             let nextY = p.y + Math.sin(p.angle) * speed;
-            if (!checkWallCollision(nextX, nextY)) { p.x = nextX; p.y = nextY; }
+            if (!checkWallCollision(nextX, nextY)) {
+                p.x = nextX; p.y = nextY;
+            } else {
+                p.angle += Math.PI * 0.5; // Turn away when bumping walls
+            }
         }
     }
 
@@ -155,8 +177,6 @@ setInterval(updateGame, 1000 / 30);
 io.on('connection', (socket) => {
     const spawn = getValidSpawnPos();
     players[socket.id] = { id: socket.id, name: getRandomName(), x: spawn.x, y: spawn.y, angle: 0, health: 5, isBot: false };
-    
-    // Explicit initialization push
     socket.emit('init', { maze, size: MAZE_SIZE, cellSize: CELL_SIZE, id: socket.id });
 
     socket.on('move', (data) => {

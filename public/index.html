@@ -1,29 +1,225 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8"><title>Maze Battle Arena</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>MAZE SHOWDOWN | CHRONICLES</title>
     <script src="/socket.io/socket.io.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;800;900&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
     <style>
-        body { margin: 0; background: #111; color: white; overflow: hidden; font-family: sans-serif; }
-        canvas { display: block; margin: 0 auto; background: #1a1a1a; }
-        #ui { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; pointer-events: none; }
-        .alive-count { font-size: 20px; color: #ff4757; font-weight: bold; }
+        :root {
+            --neon-green: #00ff66;
+            --neon-red: #ff0055;
+            --neon-orange: #ff9900;
+            --cyber-blue: #00d2ff;
+            --bg-dark: #0a0c10;
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg-dark);
+            color: #ffffff;
+            overflow: hidden;
+            font-family: 'Rajdhani', sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* Scanline Overlay for Cyberpunk Vibe */
+        body::before {
+            content: " ";
+            display: block;
+            position: absolute;
+            top: 0; left: 0; bottom: 0; right: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            z-index: 99;
+            background-size: 100% 3px, 6px 100%;
+            pointer-events: none;
+        }
+
+        canvas {
+            display: block;
+            background: radial-gradient(circle, #131722 0%, #080a0f 100%);
+        }
+
+        /* Futuristic HUD UI */
+        #hud {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(10, 12, 16, 0.85);
+            border-left: 4px solid var(--neon-green);
+            border-image: linear-gradient(to bottom, var(--neon-green), var(--cyber-blue)) 1 100%;
+            padding: 15px 25px;
+            border-radius: 0 12px 12px 0;
+            box-shadow: 0 0 20px rgba(0, 255, 102, 0.15);
+            pointer-events: none;
+            z-index: 10;
+            backdrop-filter: blur(8px);
+        }
+
+        #playerName {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 18px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: #fff;
+            margin-bottom: 5px;
+            text-shadow: 0 0 8px rgba(255,255,255,0.5);
+        }
+
+        #playerHealth {
+            font-size: 22px;
+            letter-spacing: 3px;
+            margin-bottom: 8px;
+        }
+
+        .alive-count {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 14px;
+            color: var(--cyber-blue);
+            font-weight: bold;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        /* Neon Virtual Controls Overlay */
+        #controls-container {
+            position: absolute;
+            bottom: 40px;
+            left: 0;
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            padding: 0 50px;
+            box-sizing: border-box;
+            z-index: 20;
+        }
+
+        .dpad {
+            display: grid;
+            grid-template-columns: repeat(3, 65px);
+            grid-template-rows: repeat(3, 65px);
+            gap: 8px;
+        }
+
+        .control-btn {
+            background: rgba(0, 210, 255, 0.05);
+            border: 2px solid rgba(0, 210, 255, 0.3);
+            border-radius: 16px;
+            color: var(--cyber-blue);
+            font-size: 22px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            backdrop-filter: blur(4px);
+            transition: all 0.15s ease;
+            box-shadow: inset 0 0 10px rgba(0, 210, 255, 0.1);
+        }
+
+        .control-btn:active {
+            background: rgba(0, 210, 255, 0.25);
+            border-color: var(--cyber-blue);
+            color: #fff;
+            box-shadow: 0 0 15px var(--cyber-blue);
+            transform: scale(0.92);
+        }
+
+        #btn-up { grid-column: 2; }
+        #btn-left { grid-column: 1; grid-row: 2; }
+        #btn-down { grid-column: 2; grid-row: 2; }
+        #btn-right { grid-column: 3; grid-row: 2; }
+
+        #btn-shoot {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #ff0055 0%, #990033 100%);
+            border: 3px solid rgba(255, 255, 255, 0.6);
+            color: white;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 18px;
+            font-weight: 900;
+            letter-spacing: 1px;
+            align-self: center;
+            box-shadow: 0 0 25px rgba(255, 0, 85, 0.4);
+            text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        }
+
+        #btn-shoot:active {
+            background: #ff0055;
+            box-shadow: 0 0 40px var(--neon-red);
+            transform: scale(0.9);
+        }
+
+        /* Screen States Screens */
+        #death-screen {
+            display: none;
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(5, 5, 8, 0.9);
+            z-index: 100;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(12px);
+        }
+
+        #death-screen h1 {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 4rem;
+            color: var(--neon-red);
+            margin: 0;
+            letter-spacing: 4px;
+            text-shadow: 0 0 30px rgba(255, 0, 85, 0.6);
+            animation: pulse 1.5s infinite;
+        }
+
+        #death-screen p {
+            font-size: 1.5rem;
+            color: #8892b0;
+            margin-top: 10px;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.9; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.03); }
+            100% { opacity: 0.9; transform: scale(1); }
+        }
     </style>
 </head>
 <body>
 
-<div id="ui">
-    <div id="playerName">Assigning Identity...</div>
-    <div id="playerHealth">HP: 🩸🩸🩸🩸🩸</div>
-    <div class="alive-count" id="aliveCounter">Remaining: 0</div>
+<div id="hud">
+    <div id="playerName">SYNCING INTEL...</div>
+    <div id="playerHealth">⚡⚡⚡⚡⚡</div>
+    <div class="alive-count" id="aliveCounter">SURVIVORS: 0</div>
+</div>
+
+<div id="death-screen">
+    <h1>ELIMINATED</h1>
+    <p>Tap anywhere to restart your simulation</p>
 </div>
 
 <canvas id="gameCanvas"></canvas>
+
+<div id="controls-container">
+    <div class="dpad">
+        <button class="control-btn" id="btn-up">▲</button>
+        <button class="control-btn" id="btn-left">◀</button>
+        <button class="control-btn" id="btn-down">▼</button>
+        <button class="control-btn" id="btn-right">▶</button>
+    </div>
+    <button class="control-btn" id="btn-shoot">FIRE</button>
+</div>
 
 <script>
     const socket = io();
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
+    const deathScreen = document.getElementById('death-screen');
     
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
@@ -32,58 +228,80 @@
     let maze = [];
     let cellSize = 100;
     let gameState = { players: {}, bullets: [] };
+    let touchMove = { up: false, down: false, left: false, right: false };
 
-    // Track inputs
     let keys = {};
     window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
     window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
-    window.addEventListener('click', () => socket.emit('shoot'));
 
-    socket.on('init', (data) => {
-        maze = data.maze;
-        cellSize = data.cellSize;
-        myId = data.id;
-    });
+    setupTouchButton('btn-up', 'up');
+    setupTouchButton('btn-down', 'down');
+    setupTouchButton('btn-left', 'left');
+    setupTouchButton('btn-right', 'right');
+    
+    document.getElementById('btn-shoot').addEventListener('touchstart', (e) => { e.preventDefault(); socket.emit('shoot'); });
+    document.getElementById('btn-shoot').addEventListener('mousedown', () => socket.emit('shoot'));
+    
+    deathScreen.addEventListener('click', () => { window.location.reload(); });
+    deathScreen.addEventListener('touchstart', () => { window.location.reload(); });
 
+    function setupTouchButton(id, direction) {
+        const btn = document.getElementById(id);
+        btn.addEventListener('touchstart', (e) => { e.preventDefault(); touchMove[direction] = true; });
+        btn.addEventListener('touchend', () => touchMove[direction] = false);
+        btn.addEventListener('mousedown', () => touchMove[direction] = true);
+        btn.addEventListener('mouseup', () => touchMove[direction] = false);
+    }
+
+    socket.on('init', (data) => { maze = data.maze; cellSize = data.cellSize; myId = data.id; });
     socket.on('gameState', (state) => { gameState = state; });
 
-    // Client Update Loop
     function gameLoop() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        
         let me = gameState.players[myId];
+        
         if (!me) {
-            ctx.fillStyle = "red"; ctx.font = "40px sans-serif";
-            ctx.fillText("ELIMINATED / GAME OVER", canvas.width/2 - 200, canvas.height/2);
+            deathScreen.style.display = 'flex';
             requestAnimationFrame(gameLoop);
             return;
+        } else {
+            deathScreen.style.display = 'none';
         }
 
-        // Update UI
-        document.getElementById('playerName').innerText = `Identity: ${me.name}`;
-        document.getElementById('playerHealth').innerText = "HP: " + "🩸".repeat(me.health);
-        document.getElementById('aliveCounter').innerText = `Survivors: ${Object.keys(gameState.players).length}`;
+        document.getElementById('playerName').innerText = me.name;
+        document.getElementById('playerHealth').innerText = "⚡".repeat(me.health) + "  ".repeat(5 - me.health);
+        document.getElementById('aliveCounter').innerText = `SYSTEM SURVIVORS: ${Object.keys(gameState.players).length}`;
 
-        // Keyboard Movement Calculations
         let dx = 0, dy = 0;
-        if (keys['w'] || keys['arrowup']) dy = -1;
-        if (keys['s'] || keys['arrowdown']) dy = 1;
-        if (keys['a'] || keys['arrowleft']) dx = -1;
-        if (keys['d'] || keys['arrowright']) dx = 1;
+        if (keys['w'] || keys['arrowup'] || touchMove.up) dy = -1;
+        if (keys['s'] || keys['arrowdown'] || touchMove.down) dy = 1;
+        if (keys['a'] || keys['arrowleft'] || touchMove.left) dx = -1;
+        if (keys['d'] || keys['arrowright'] || touchMove.right) dx = 1;
 
         if (dx !== 0 || dy !== 0) {
-            let angle = Math.atan2(dy, dx);
-            socket.emit('move', { angle: angle, speed: 4 });
+            socket.emit('move', { angle: Math.atan2(dy, dx), speed: 4.5 });
         }
 
-        // Camera Math (Centers viewport on current client)
         let camX = canvas.width / 2 - me.x;
         let camY = canvas.height / 2 - me.y;
         ctx.save();
         ctx.translate(camX, camY);
 
-        // Draw Maze Walls
-        ctx.strokeStyle = "#4b6584"; ctx.lineWidth = 4;
+        // Draw Floor Grid Pattern
+        ctx.strokeStyle = "rgba(0, 210, 255, 0.03)";
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 1500; i += 40) {
+            ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 1500); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(1500, i); ctx.stroke();
+        }
+
+        // Draw Neon Maze Walls with Glow Layers
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = "#00d2ff";
+        ctx.strokeStyle = "#00d2ff"; 
+        ctx.lineWidth = 5;
+        ctx.lineCap = "round";
+        
         for (let r = 0; r < maze.length; r++) {
             for (let c = 0; c < maze[r].length; c++) {
                 let x = c * cellSize, y = r * cellSize;
@@ -96,36 +314,60 @@
                 ctx.stroke();
             }
         }
+        ctx.shadowBlur = 0; // Clear shadow for other elements
 
-        // Draw Bullets
-        ctx.fillStyle = "#ffd32a";
+        // Draw Futuristic Projectiles
         for (let b of gameState.bullets) {
+            ctx.shadowBlur = 8;
+            ctx.shadowColor = "#ffd32a";
+            ctx.fillStyle = "#ffffff";
             ctx.beginPath(); ctx.arc(b.x, b.y, 4, 0, Math.PI * 2); ctx.fill();
         }
+        ctx.shadowBlur = 0;
 
-        // Draw Players & Bots
+        // Draw Entities (Players & AI)
         for (let id in gameState.players) {
             let p = gameState.players[id];
             
-            // Set colors: Green for self, Deep Red for Hard Bots, Orange for Easy Bots/Enemies
-            ctx.fillStyle = (id === myId) ? "#2ed573" : (p.isHard ? "#xeb3b2" && "#ff3f34" : "#ffa502");
-            
-            ctx.beginPath(); ctx.arc(p.x, p.y, 15, 0, Math.PI * 2); ctx.fill();
+            let coreColor = "#ffa502"; // Regular Bots
+            if (id === myId) coreColor = "#00ff66"; // Main Player
+            else if (p.isHard) coreColor = "#ff0055"; // Super AI Bots
 
-            // Draw Aim Vector line
-            ctx.strokeStyle = "white"; ctx.lineWidth = 2;
+            // Glow Ring around entities
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = coreColor;
+            
+            // Draw Main Character Core
+            ctx.fillStyle = coreColor;
+            ctx.beginPath(); ctx.arc(p.x, p.y, 14, 0, Math.PI * 2); ctx.fill();
+            ctx.shadowBlur = 0;
+
+            // Sleek Pointer Line
+            ctx.strokeStyle = "rgba(255,255,255,0.8)"; 
+            ctx.lineWidth = 3;
             ctx.beginPath(); ctx.moveTo(p.x, p.y);
-            ctx.lineTo(p.x + Math.cos(p.angle) * 22, p.y + Math.sin(p.angle) * 22);
+            ctx.lineTo(p.x + Math.cos(p.angle) * 20, p.y + Math.sin(p.angle) * 20);
             ctx.stroke();
 
-            // Draw Names & Health above assets
-            ctx.fillStyle = "white"; ctx.font = "12px sans-serif"; ctx.textAlign = "center";
-            ctx.fillText(`${p.name} [HP:${p.health}]`, p.x, p.y - 22);
+            // Minimalistic futuristic text display
+            ctx.fillStyle = "#ffffff"; 
+            ctx.font = "bold 13px 'Rajdhani', sans-serif"; 
+            ctx.textAlign = "center";
+            ctx.fillText(p.name, p.x, p.y - 24);
+            
+            // Health Bar asset above heads
+            ctx.fillStyle = "rgba(255,255,255,0.2)";
+            ctx.fillRect(p.x - 20, p.y - 18, 40, 4);
+            ctx.fillStyle = coreColor;
+            ctx.fillRect(p.x - 20, p.y - 18, (p.health / 5) * 40, 4);
         }
+
         ctx.restore();
         requestAnimationFrame(gameLoop);
     }
     requestAnimationFrame(gameLoop);
+
+    window.addEventListener('resize', () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; });
 </script>
 </body>
 </html>

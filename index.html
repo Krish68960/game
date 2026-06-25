@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"><title>Maze Battle Arena</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body { margin: 0; background: #111; color: white; overflow: hidden; font-family: sans-serif; }
+        canvas { display: block; margin: 0 auto; background: #1a1a1a; }
+        #ui { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; pointer-events: none; }
+        .alive-count { font-size: 20px; color: #ff4757; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <div id="playerName">Assigning Identity...</div>
+    <div id="playerHealth">HP: 🩸🩸🩸🩸🩸</div>
+    <div class="alive-count" id="aliveCounter">Remaining: 0</div>
+</div>
+
+<canvas id="gameCanvas"></canvas>
+
+<script>
+    const socket = io();
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    let myId = null;
+    let maze = [];
+    let cellSize = 100;
+    let gameState = { players: {}, bullets: [] };
+
+    // Track inputs
+    let keys = {};
+    window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+    window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+    window.addEventListener('click', () => socket.emit('shoot'));
+
+    socket.on('init', (data) => {
+        maze = data.maze;
+        cellSize = data.cellSize;
+        myId = data.id;
+    });
+
+    socket.on('gameState', (state) => { gameState = state; });
+
+    // Client Update Loop
+    function gameLoop() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        let me = gameState.players[myId];
+        if (!me) {
+            ctx.fillStyle = "red"; ctx.font = "40px sans-serif";
+            ctx.fillText("ELIMINATED / GAME OVER", canvas.width/2 - 200, canvas.height/2);
+            requestAnimationFrame(gameLoop);
+            return;
+        }
+
+        // Update UI
+        document.getElementById('playerName').innerText = `Identity: ${me.name}`;
+        document.getElementById('playerHealth').innerText = "HP: " + "🩸".repeat(me.health);
+        document.getElementById('aliveCounter').innerText = `Survivors: ${Object.keys(gameState.players).length}`;
+
+        // Keyboard Movement Calculations
+        let dx = 0, dy = 0;
+        if (keys['w'] || keys['arrowup']) dy = -1;
+        if (keys['s'] || keys['arrowdown']) dy = 1;
+        if (keys['a'] || keys['arrowleft']) dx = -1;
+        if (keys['d'] || keys['arrowright']) dx = 1;
+
+        if (dx !== 0 || dy !== 0) {
+            let angle = Math.atan2(dy, dx);
+            socket.emit('move', { angle: angle, speed: 4 });
+        }
+
+        // Camera Math (Centers viewport on current client)
+        let camX = canvas.width / 2 - me.x;
+        let camY = canvas.height / 2 - me.y;
+        ctx.save();
+        ctx.translate(camX, camY);
+
+        // Draw Maze Walls
+        ctx.strokeStyle = "#4b6584"; ctx.lineWidth = 4;
+        for (let r = 0; r < maze.length; r++) {
+            for (let c = 0; c < maze[r].length; c++) {
+                let x = c * cellSize, y = r * cellSize;
+                let cell = maze[r][c];
+                ctx.beginPath();
+                if (cell.n) { ctx.moveTo(x, y); ctx.lineTo(x + cellSize, y); }
+                if (cell.s) { ctx.moveTo(x, y + cellSize); ctx.lineTo(x + cellSize, y + cellSize); }
+                if (cell.e) { ctx.moveTo(x + cellSize, y); ctx.lineTo(x + cellSize, y + cellSize); }
+                if (cell.w) { ctx.moveTo(x, y); ctx.lineTo(x, y + cellSize); }
+                ctx.stroke();
+            }
+        }
+
+        // Draw Bullets
+        ctx.fillStyle = "#ffd32a";
+        for (let b of gameState.bullets) {
+            ctx.beginPath(); ctx.arc(b.x, b.y, 4, 0, Math.PI * 2); ctx.fill();
+        }
+
+        // Draw Players & Bots
+        for (let id in gameState.players) {
+            let p = gameState.players[id];
+            
+            // Set colors: Green for self, Deep Red for Hard Bots, Orange for Easy Bots/Enemies
+            ctx.fillStyle = (id === myId) ? "#2ed573" : (p.isHard ? "#xeb3b2" && "#ff3f34" : "#ffa502");
+            
+            ctx.beginPath(); ctx.arc(p.x, p.y, 15, 0, Math.PI * 2); ctx.fill();
+
+            // Draw Aim Vector line
+            ctx.strokeStyle = "white"; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(p.x, p.y);
+            ctx.lineTo(p.x + Math.cos(p.angle) * 22, p.y + Math.sin(p.angle) * 22);
+            ctx.stroke();
+
+            // Draw Names & Health above assets
+            ctx.fillStyle = "white"; ctx.font = "12px sans-serif"; ctx.textAlign = "center";
+            ctx.fillText(`${p.name} [HP:${p.health}]`, p.x, p.y - 22);
+        }
+        ctx.restore();
+        requestAnimationFrame(gameLoop);
+    }
+    requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>

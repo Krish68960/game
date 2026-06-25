@@ -57,7 +57,6 @@ function getRandomCellCenter() {
     return { x: c * CELL_SIZE + 50, y: r * CELL_SIZE + 50 };
 }
 
-// FIXED: Clean wall blocking check used for both player sliding AND bullet destruction
 function isWallBlocking(x, y, dx, dy) {
     let c = Math.floor(x / CELL_SIZE);
     let r = Math.floor(y / CELL_SIZE);
@@ -67,13 +66,11 @@ function isWallBlocking(x, y, dx, dy) {
     let offsetX = x % CELL_SIZE;
     let offsetY = y % CELL_SIZE;
 
-    // Bullet precision checks (using tighter thresholds)
     if (dx > 0 && cell.e && offsetX > 92) return true;
     if (dx < 0 && cell.w && offsetX < 8) return true;
     if (dy > 0 && cell.s && offsetY > 92) return true;
     if (dy < 0 && cell.n && offsetY < 8) return true;
 
-    // Inside wall check
     if (cell.e && offsetX > 96) return true;
     if (cell.w && offsetX < 4) return true;
     if (cell.s && offsetY > 96) return true;
@@ -95,19 +92,34 @@ function hasLineOfSight(x0, y0, x1, y1) {
     return true;
 }
 
-// FIXED: Uses deterministic unique sequential keys so exactly 25 bots launch simultaneously
+// FIXED: Hard-isolated loop generation block guarantees exactly 20 normal and 5 extreme bots load cleanly
 function initBots() {
-    for (let i = 0; i < 25; i++) {
-        const isHard = i >= 20; 
-        const botId = `bot_index_${i}`; // Foolproof sequential identification keys
+    players = {}; // Complete wipe before allocation
+    
+    // Part A: Deploy 20 Normal Bots (Indices 0 to 19)
+    for (let i = 0; i < 20; i++) {
+        const botId = `bot_normal_${i}`;
         const spawn = getRandomCellCenter();
-        
         players[botId] = {
             id: botId,
-            name: getRandomName(isHard ? "ULTRA_" : ""),
+            name: getRandomName(""),
             x: spawn.x, y: spawn.y,
             angle: Math.random() * Math.PI * 2,
-            health: 5, isBot: true, isHard: isHard, lastShot: 0,
+            health: 5, isBot: true, isHard: false, lastShot: 0,
+            vx: 0, vy: 0
+        };
+    }
+
+    // Part B: Deploy 5 Extreme Hard Bots (Indices 20 to 24)
+    for (let i = 20; i < 25; i++) {
+        const botId = `bot_extreme_${i}`;
+        const spawn = getRandomCellCenter();
+        players[botId] = {
+            id: botId,
+            name: getRandomName("EXTREME_"),
+            x: spawn.x, y: spawn.y,
+            angle: Math.random() * Math.PI * 2,
+            health: 5, isBot: true, isHard: true, lastShot: 0,
             vx: 0, vy: 0
         };
     }
@@ -124,7 +136,6 @@ function updateGame() {
         let bc = Math.floor(nextX / CELL_SIZE);
         let br = Math.floor(nextY / CELL_SIZE);
         
-        // FIXED: Bullets now pop instantly when crossing vector wall thresholds
         if (bc < 0 || bc >= MAZE_SIZE || br < 0 || br >= MAZE_SIZE || isWallBlocking(nextX, nextY, Math.cos(b.angle), Math.sin(b.angle))) {
             bullets.splice(i, 1);
             continue;
@@ -159,8 +170,9 @@ function updateGame() {
             }
         }
 
-        let speed = p.isHard ? 3.6 : 2.2;
-        let fireCooldown = p.isHard ? 300 : 900;
+        // BUFFED: Extreme bots now run at 4.2 speed and shoot every 200ms with hyper precision
+        let speed = p.isHard ? 4.2 : 2.2;
+        let fireCooldown = p.isHard ? 200 : 900;
 
         let targetVisible = closestTarget && hasLineOfSight(p.x, p.y, closestTarget.x, closestTarget.y);
 
@@ -170,7 +182,9 @@ function updateGame() {
             p.vy = Math.sin(p.angle) * speed;
 
             if (now - p.lastShot > fireCooldown) {
-                bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle + (Math.random() - 0.5) * 0.05, speed: 11 });
+                // Extreme bots get zero gun spread sway for max challenge accuracy
+                let variance = p.isHard ? 0 : (Math.random() - 0.5) * 0.05;
+                bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle + variance, speed: 12 });
                 p.lastShot = now;
             }
         } else {
@@ -194,7 +208,7 @@ setInterval(updateGame, 1000 / 30);
 
 io.on('connection', (socket) => {
     let spawn = getRandomCellCenter();
-    players[socket.id] = { id: socket.id, name: getRandomName(), x: spawn.x, y: spawn.y, angle: 0, health: 5, isBot: false };
+    players[socket.id] = { id: socket.id, name: getRandomName(""), x: spawn.x, y: spawn.y, angle: 0, health: 5, isBot: false };
     socket.emit('init', { maze, size: MAZE_SIZE, cellSize: CELL_SIZE, id: socket.id });
 
     socket.on('move', (data) => {
@@ -210,7 +224,7 @@ io.on('connection', (socket) => {
     socket.on('shoot', () => {
         let p = players[socket.id];
         if (!p) return;
-        bullets.push({ ownerId: socket.id, x: p.x, y: p.y, angle: p.angle, speed: 11 });
+        bullets.push({ ownerId: socket.id, x: p.x, y: p.y, angle: p.angle, speed: 12 });
     });
 
     socket.on('disconnect', () => { delete players[socket.id]; });

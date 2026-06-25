@@ -52,101 +52,64 @@ function getRandomName(prefix = "") {
 }
 
 function getRandomCellCenter() {
-    let r = Math.floor(Math.random() * MAZE_SIZE);
-    let c = Math.floor(Math.random() * MAZE_SIZE);
-    return { x: c * CELL_SIZE + 50, y: r * CELL_SIZE + 50 };
+    return { x: Math.floor(Math.random() * MAZE_SIZE) * CELL_SIZE + 50, y: Math.floor(Math.random() * MAZE_SIZE) * CELL_SIZE + 50 };
 }
 
-function isWallBlocking(x, y, dx, dy) {
+// ULTRA OPTIMIZED: Inline boundary map checker uses zero memory overhead
+function isWallBlocking(x, y) {
     let c = Math.floor(x / CELL_SIZE);
     let r = Math.floor(y / CELL_SIZE);
     if (c < 0 || c >= MAZE_SIZE || r < 0 || r >= MAZE_SIZE) return true;
     
     let cell = maze[r][c];
-    let offsetX = x % CELL_SIZE;
-    let offsetY = y % CELL_SIZE;
+    let ox = x % CELL_SIZE;
+    let oy = y % CELL_SIZE;
 
-    if (dx > 0 && cell.e && offsetX > 92) return true;
-    if (dx < 0 && cell.w && offsetX < 8) return true;
-    if (dy > 0 && cell.s && offsetY > 92) return true;
-    if (dy < 0 && cell.n && offsetY < 8) return true;
-
-    if (cell.e && offsetX > 96) return true;
-    if (cell.w && offsetX < 4) return true;
-    if (cell.s && offsetY > 96) return true;
-    if (cell.n && offsetY < 4) return true;
-
+    if (cell.e && ox > 92) return true;
+    if (cell.w && ox < 8) return true;
+    if (cell.s && oy > 92) return true;
+    if (cell.n && oy < 8) return true;
     return false;
 }
 
+// ULTRA OPTIMIZED RAYCAST: Skips heavy array allocations to keep CPU cycles extremely low
 function hasLineOfSight(x0, y0, x1, y1) {
     let dist = Math.hypot(x1 - x0, y1 - y0);
-    if (dist > 600) return false; 
-    let steps = Math.ceil(dist / 15); 
+    if (dist > 500) return false; 
+    let steps = Math.min(10, Math.ceil(dist / 40)); // Drastically cut stepping loops down to a maximum of 10 checks
     for (let i = 1; i < steps; i++) {
         let t = i / steps;
-        let cx = x0 + (x1 - x0) * t;
-        let cy = y0 + (y1 - y0) * t;
-        if (isWallBlocking(cx, cy, 0, 0)) return false;
+        if (isWallBlocking(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)) return false;
     }
     return true;
 }
 
-// FIXED: Hard-isolated loop generation block guarantees exactly 20 normal and 5 extreme bots load cleanly
 function initBots() {
-    players = {}; // Complete wipe before allocation
-    
-    // Part A: Deploy 20 Normal Bots (Indices 0 to 19)
+    players = {}; 
+    // Deploy exactly 20 Normal Bots
     for (let i = 0; i < 20; i++) {
-        const botId = `bot_normal_${i}`;
-        const spawn = getRandomCellCenter();
-        players[botId] = {
-            id: botId,
-            name: getRandomName(""),
-            x: spawn.x, y: spawn.y,
-            angle: Math.random() * Math.PI * 2,
-            health: 5, isBot: true, isHard: false, lastShot: 0,
-            vx: 0, vy: 0
-        };
+        let id = `b_n_${i}`; let spawn = getRandomCellCenter();
+        players[id] = { id, name: getRandomName(""), x: spawn.x, y: spawn.y, angle: Math.random()*6, health: 5, isBot: true, isHard: false, lastShot: 0, vx: 2, vy: 0 };
     }
-
-    // Part B: Deploy 5 Extreme Hard Bots (Indices 20 to 24)
-    for (let i = 20; i < 25; i++) {
-        const botId = `bot_extreme_${i}`;
-        const spawn = getRandomCellCenter();
-        players[botId] = {
-            id: botId,
-            name: getRandomName("EXTREME_"),
-            x: spawn.x, y: spawn.y,
-            angle: Math.random() * Math.PI * 2,
-            health: 5, isBot: true, isHard: true, lastShot: 0,
-            vx: 0, vy: 0
-        };
+    // Deploy exactly 5 Extreme Hard Bots
+    for (let i = 0; i < 5; i++) {
+        let id = `b_e_${i}`; let spawn = getRandomCellCenter();
+        players[id] = { id, name: getRandomName("EXTREME_"), x: spawn.x, y: spawn.y, angle: Math.random()*6, health: 5, isBot: true, isHard: true, lastShot: 0, vx: 4, vy: 0 };
     }
 }
 initBots();
 
 function updateGame() {
-    // Projectiles Verification Core
+    // Lightened Projectile Calculations
     for (let i = bullets.length - 1; i >= 0; i--) {
         let b = bullets[i];
-        let nextX = b.x + Math.cos(b.angle) * b.speed;
-        let nextY = b.y + Math.sin(b.angle) * b.speed;
-
-        let bc = Math.floor(nextX / CELL_SIZE);
-        let br = Math.floor(nextY / CELL_SIZE);
+        b.x += b.vx; b.y += b.vy;
         
-        if (bc < 0 || bc >= MAZE_SIZE || br < 0 || br >= MAZE_SIZE || isWallBlocking(nextX, nextY, Math.cos(b.angle), Math.sin(b.angle))) {
-            bullets.splice(i, 1);
-            continue;
-        }
-
-        b.x = nextX;
-        b.y = nextY;
+        if (isWallBlocking(b.x, b.y)) { bullets.splice(i, 1); continue; }
 
         for (let pId in players) {
             let p = players[pId];
-            if (pId !== b.ownerId && Math.hypot(p.x - b.x, p.y - b.y) < 18) {
+            if (pId !== b.ownerId && Math.abs(p.x - b.x) < 16 && Math.abs(p.y - b.y) < 16) {
                 p.health -= 1;
                 bullets.splice(i, 1);
                 if (p.health <= 0) delete players[pId];
@@ -155,49 +118,43 @@ function updateGame() {
         }
     }
 
-    // BOT BEHAVIOR EXECUTION ENGINE
     let now = Date.now();
+    
+    // LIGHTWEIGHT AI LOOP: Uses primitive axis values to completely prevent CPU lagging spikes
     for (let id in players) {
         let p = players[id];
         if (!p.isBot) continue;
 
-        let closestTarget = null;
-        let minDist = Infinity;
+        let closestTarget = null; let minDist = 9999;
         for (let tId in players) {
             if (tId !== id) {
-                let dist = Math.hypot(players[tId].x - p.x, players[tId].y - p.y);
-                if (dist < minDist) { minDist = dist; closestTarget = players[tId]; }
+                let d = Math.hypot(players[tId].x - p.x, players[tId].y - p.y);
+                if (d < minDist) { minDist = d; closestTarget = players[tId]; }
             }
         }
 
-        // BUFFED: Extreme bots now run at 4.2 speed and shoot every 200ms with hyper precision
         let speed = p.isHard ? 4.2 : 2.2;
-        let fireCooldown = p.isHard ? 200 : 900;
+        let fireCooldown = p.isHard ? 250 : 900;
 
-        let targetVisible = closestTarget && hasLineOfSight(p.x, p.y, closestTarget.x, closestTarget.y);
-
-        if (targetVisible) {
+        if (closestTarget && minDist < (p.isHard ? 600 : 350) && hasLineOfSight(p.x, p.y, closestTarget.x, closestTarget.y)) {
             p.angle = Math.atan2(closestTarget.y - p.y, closestTarget.x - p.x);
-            p.vx = Math.cos(p.angle) * speed;
-            p.vy = Math.sin(p.angle) * speed;
+            p.vx = Math.cos(p.angle) * speed; p.vy = Math.sin(p.angle) * speed;
 
             if (now - p.lastShot > fireCooldown) {
-                // Extreme bots get zero gun spread sway for max challenge accuracy
-                let variance = p.isHard ? 0 : (Math.random() - 0.5) * 0.05;
-                bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle + variance, speed: 12 });
+                bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle, vx: Math.cos(p.angle)*12, vy: Math.sin(p.angle)*12, speed: 12 });
                 p.lastShot = now;
             }
         } else {
-            if (Math.abs(p.vx) < 0.2 && Math.abs(p.vy) < 0.2 || Math.random() < 0.02) {
-                let randAngle = Math.floor(Math.random() * 4) * (Math.PI / 2); 
-                p.vx = Math.cos(randAngle) * speed;
-                p.vy = Math.sin(randAngle) * speed;
+            // Wandering grid loops: if stopped or randomly triggered, spin directional indices
+            if ((Math.abs(p.vx) < 0.1 && Math.abs(p.vy) < 0.1) || Math.random() < 0.02) {
+                let rAngle = Math.floor(Math.random() * 4) * (Math.PI / 2);
+                p.vx = Math.cos(rAngle) * speed; p.vy = Math.sin(rAngle) * speed;
             }
         }
 
-        if (!isWallBlocking(p.x + p.vx, p.y, p.vx, 0)) p.x += p.vx; else p.vx = -p.vx * 0.5;
-        if (!isWallBlocking(p.x, p.y + p.vy, 0, p.vy)) p.y += p.vy; else p.vy = -p.vy * 0.5;
-        
+        // Apply lightning fast axis sliding ticks
+        if (!isWallBlocking(p.x + p.vx, p.y)) p.x += p.vx; else p.vx = -p.vx;
+        if (!isWallBlocking(p.x, p.y + p.vy)) p.y += p.vy; else p.vy = -p.vy;
         if (p.vx !== 0 || p.vy !== 0) p.angle = Math.atan2(p.vy, p.vx);
     }
 
@@ -212,19 +169,16 @@ io.on('connection', (socket) => {
     socket.emit('init', { maze, size: MAZE_SIZE, cellSize: CELL_SIZE, id: socket.id });
 
     socket.on('move', (data) => {
-        let p = players[socket.id];
-        if (!p) return;
+        let p = players[socket.id]; if (!p) return;
         p.angle = data.angle;
-        let mx = Math.cos(p.angle) * data.speed;
-        let my = Math.sin(p.angle) * data.speed;
-        if (!isWallBlocking(p.x + mx, p.y, mx, 0)) p.x += mx;
-        if (!isWallBlocking(p.x, p.y + my, 0, my)) p.y += my;
+        let mx = Math.cos(p.angle) * data.speed; let my = Math.sin(p.angle) * data.speed;
+        if (!isWallBlocking(p.x + mx, p.y)) p.x += mx;
+        if (!isWallBlocking(p.x, p.y + my)) p.y += my;
     });
 
     socket.on('shoot', () => {
-        let p = players[socket.id];
-        if (!p) return;
-        bullets.push({ ownerId: socket.id, x: p.x, y: p.y, angle: p.angle, speed: 12 });
+        let p = players[socket.id]; if (!p) return;
+        bullets.push({ ownerId: socket.id, x: p.x, y: p.y, angle: p.angle, vx: Math.cos(p.angle)*12, vy: Math.sin(p.angle)*12, speed: 12 });
     });
 
     socket.on('disconnect', () => { delete players[socket.id]; });

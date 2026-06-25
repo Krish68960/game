@@ -55,7 +55,6 @@ function getRandomCellCenter() {
     return { x: Math.floor(Math.random() * MAZE_SIZE) * CELL_SIZE + 50, y: Math.floor(Math.random() * MAZE_SIZE) * CELL_SIZE + 50 };
 }
 
-// ULTRA OPTIMIZED: Inline boundary map checker uses zero memory overhead
 function isWallBlocking(x, y) {
     let c = Math.floor(x / CELL_SIZE);
     let r = Math.floor(y / CELL_SIZE);
@@ -72,11 +71,10 @@ function isWallBlocking(x, y) {
     return false;
 }
 
-// ULTRA OPTIMIZED RAYCAST: Skips heavy array allocations to keep CPU cycles extremely low
 function hasLineOfSight(x0, y0, x1, y1) {
     let dist = Math.hypot(x1 - x0, y1 - y0);
     if (dist > 500) return false; 
-    let steps = Math.min(10, Math.ceil(dist / 40)); // Drastically cut stepping loops down to a maximum of 10 checks
+    let steps = Math.min(10, Math.ceil(dist / 40)); 
     for (let i = 1; i < steps; i++) {
         let t = i / steps;
         if (isWallBlocking(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)) return false;
@@ -86,21 +84,18 @@ function hasLineOfSight(x0, y0, x1, y1) {
 
 function initBots() {
     players = {}; 
-    // Deploy exactly 20 Normal Bots
     for (let i = 0; i < 20; i++) {
         let id = `b_n_${i}`; let spawn = getRandomCellCenter();
-        players[id] = { id, name: getRandomName(""), x: spawn.x, y: spawn.y, angle: Math.random()*6, health: 5, isBot: true, isHard: false, lastShot: 0, vx: 2, vy: 0 };
+        players[id] = { id, name: getRandomName(""), x: spawn.x, y: spawn.y, angle: Math.random()*6, health: 5, isBot: true, isHard: false, lastShot: 0, vx: 2, vy: 0, wallStuckFrames: 0 };
     }
-    // Deploy exactly 5 Extreme Hard Bots
     for (let i = 0; i < 5; i++) {
         let id = `b_e_${i}`; let spawn = getRandomCellCenter();
-        players[id] = { id, name: getRandomName("EXTREME_"), x: spawn.x, y: spawn.y, angle: Math.random()*6, health: 5, isBot: true, isHard: true, lastShot: 0, vx: 4, vy: 0 };
+        players[id] = { id, name: getRandomName("EXTREME_"), x: spawn.x, y: spawn.y, angle: Math.random()*6, health: 5, isBot: true, isHard: true, lastShot: 0, vx: 4, vy: 0, wallStuckFrames: 0 };
     }
 }
 initBots();
 
 function updateGame() {
-    // Lightened Projectile Calculations
     for (let i = bullets.length - 1; i >= 0; i--) {
         let b = bullets[i];
         b.x += b.vx; b.y += b.vy;
@@ -120,12 +115,13 @@ function updateGame() {
 
     let now = Date.now();
     
-    // LIGHTWEIGHT AI LOOP: Uses primitive axis values to completely prevent CPU lagging spikes
     for (let id in players) {
         let p = players[id];
         if (!p.isBot) continue;
 
-        let closestTarget = null; let minDist = 9999;
+        // 1. 360 DEGREE RADAR SCAN: Scans in all directions for the closest enemy player/bot
+        let closestTarget = null; 
+        let minDist = 9999;
         for (let tId in players) {
             if (tId !== id) {
                 let d = Math.hypot(players[tId].x - p.x, players[tId].y - p.y);
@@ -133,28 +129,55 @@ function updateGame() {
             }
         }
 
-        let speed = p.isHard ? 4.2 : 2.2;
-        let fireCooldown = p.isHard ? 250 : 900;
+        let speed = p.isHard ? 4.2 : 2.4;
+        let fireCooldown = p.isHard ? 220 : 850;
+        let detectionRange = p.isHard ? 650 : 400;
 
-        if (closestTarget && minDist < (p.isHard ? 600 : 350) && hasLineOfSight(p.x, p.y, closestTarget.x, closestTarget.y)) {
+        let canSeeTarget = closestTarget && minDist < detectionRange && hasLineOfSight(p.x, p.y, closestTarget.x, closestTarget.y);
+
+        // 2. STUCK DETECTION AND WALL STANDOFF BREAKOUT COUNTER
+        if (p.wallStuckFrames > 45) {
+            // Force the bot to stop hunting and pick a hard alternative angle to run away around the wall corner
+            let escapeAngle = p.angle + (Math.random() > 0.5 ? Math.PI / 2 : -Math.PI / 2);
+            p.vx = Math.cos(escapeAngle) * speed;
+            p.vy = Math.sin(escapeAngle) * speed;
+            if (Math.random() < 0.05) p.wallStuckFrames = 0; // Reset after breakout escape maneuver complete
+            canSeeTarget = false; // Temporarily mask line of sight to prioritize movement over wall pointing
+        }
+
+        if (canSeeTarget) {
+            // COMBAT RADAR FOLLOW AND SHOOT LOGIC
             p.angle = Math.atan2(closestTarget.y - p.y, closestTarget.x - p.x);
-            p.vx = Math.cos(p.angle) * speed; p.vy = Math.sin(p.angle) * speed;
+            p.vx = Math.cos(p.angle) * speed; 
+            p.vy = Math.sin(p.angle) * speed;
 
             if (now - p.lastShot > fireCooldown) {
                 bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle, vx: Math.cos(p.angle)*12, vy: Math.sin(p.angle)*12, speed: 12 });
                 p.lastShot = now;
             }
-        } else {
-            // Wandering grid loops: if stopped or randomly triggered, spin directional indices
+        } else if (p.wallStuckFrames <= 45) {
+            // REGULAR ROAMING MAP RADAR PATROL
             if ((Math.abs(p.vx) < 0.1 && Math.abs(p.vy) < 0.1) || Math.random() < 0.02) {
                 let rAngle = Math.floor(Math.random() * 4) * (Math.PI / 2);
-                p.vx = Math.cos(rAngle) * speed; p.vy = Math.sin(rAngle) * speed;
+                p.vx = Math.cos(rAngle) * speed; 
+                p.vy = Math.sin(rAngle) * speed;
             }
         }
 
-        // Apply lightning fast axis sliding ticks
+        // 3. DETERMINISTIC BOUNDS MOVEMENT + LOCK PROTECTION
+        let oldX = p.x;
+        let oldY = p.y;
+
         if (!isWallBlocking(p.x + p.vx, p.y)) p.x += p.vx; else p.vx = -p.vx;
         if (!isWallBlocking(p.x, p.y + p.vy)) p.y += p.vy; else p.vy = -p.vy;
+        
+        // Check if position didn't actually change (stuck against wall blocking threshold)
+        if (Math.abs(p.x - oldX) < 0.1 && Math.abs(p.y - oldY) < 0.1 && (p.vx !== 0 || p.vy !== 0)) {
+            p.wallStuckFrames++;
+        } else {
+            if (p.wallStuckFrames > 0) p.wallStuckFrames--;
+        }
+
         if (p.vx !== 0 || p.vy !== 0) p.angle = Math.atan2(p.vy, p.vx);
     }
 

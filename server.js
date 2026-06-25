@@ -18,7 +18,6 @@ const CELL_SIZE = 100;
 let players = {};
 let bullets = [];
 
-// Generates an Open-Braided Grid Map layout
 function generateArenaGrid(size) {
     let grid = Array(size).fill(null).map(() => Array(size).fill(null).map(() => ({ n: true, s: true, e: true, w: true })));
     let visited = Array(size).fill(null).map(() => Array(size).fill(false));
@@ -37,7 +36,6 @@ function generateArenaGrid(size) {
     }
     dfs(0, 0);
 
-    // Tear down 50% of inner grid walls to completely prevent bottlenecks and clustering locks
     for (let r = 1; r < size - 1; r++) {
         for (let c = 1; c < size - 1; c++) {
             if (Math.random() < 0.5) { grid[r][c].n = false; grid[r-1][c].s = false; }
@@ -59,11 +57,49 @@ function getRandomCellCenter() {
     return { x: c * CELL_SIZE + 50, y: r * CELL_SIZE + 50 };
 }
 
+// FIXED: Clean wall blocking check used for both player sliding AND bullet destruction
+function isWallBlocking(x, y, dx, dy) {
+    let c = Math.floor(x / CELL_SIZE);
+    let r = Math.floor(y / CELL_SIZE);
+    if (c < 0 || c >= MAZE_SIZE || r < 0 || r >= MAZE_SIZE) return true;
+    
+    let cell = maze[r][c];
+    let offsetX = x % CELL_SIZE;
+    let offsetY = y % CELL_SIZE;
+
+    // Bullet precision checks (using tighter thresholds)
+    if (dx > 0 && cell.e && offsetX > 92) return true;
+    if (dx < 0 && cell.w && offsetX < 8) return true;
+    if (dy > 0 && cell.s && offsetY > 92) return true;
+    if (dy < 0 && cell.n && offsetY < 8) return true;
+
+    // Inside wall check
+    if (cell.e && offsetX > 96) return true;
+    if (cell.w && offsetX < 4) return true;
+    if (cell.s && offsetY > 96) return true;
+    if (cell.n && offsetY < 4) return true;
+
+    return false;
+}
+
+function hasLineOfSight(x0, y0, x1, y1) {
+    let dist = Math.hypot(x1 - x0, y1 - y0);
+    if (dist > 600) return false; 
+    let steps = Math.ceil(dist / 15); 
+    for (let i = 1; i < steps; i++) {
+        let t = i / steps;
+        let cx = x0 + (x1 - x0) * t;
+        let cy = y0 + (y1 - y0) * t;
+        if (isWallBlocking(cx, cy, 0, 0)) return false;
+    }
+    return true;
+}
+
+// FIXED: Uses deterministic unique sequential keys so exactly 25 bots launch simultaneously
 function initBots() {
-    players = {};
     for (let i = 0; i < 25; i++) {
         const isHard = i >= 20; 
-        const botId = `bot_${i}_${Date.now()}`;
+        const botId = `bot_index_${i}`; // Foolproof sequential identification keys
         const spawn = getRandomCellCenter();
         
         players[botId] = {
@@ -78,47 +114,24 @@ function initBots() {
 }
 initBots();
 
-// Master Matrix Wall Engine: Evaluates position changes deterministically via tile maps
-function isWallBlocking(x, y, dx, dy) {
-    let c = Math.floor(x / CELL_SIZE);
-    let r = Math.floor(y / CELL_SIZE);
-    if (c < 0 || c >= MAZE_SIZE || r < 0 || r >= MAZE_SIZE) return true;
-    
-    let cell = maze[r][c];
-    if (dx > 0 && cell.e && (x % CELL_SIZE) > 82) return true;
-    if (dx < 0 && cell.w && (x % CELL_SIZE) < 18) return true;
-    if (dy > 0 && cell.s && (y % CELL_SIZE) > 82) return true;
-    if (dy < 0 && cell.n && (y % CELL_SIZE) < 18) return true;
-    return false;
-}
-
-function hasLineOfSight(x0, y0, x1, y1) {
-    let dist = Math.hypot(x1 - x0, y1 - y0);
-    if (dist > 500) return false; // Max sight cap
-    let steps = Math.ceil(dist / 20); 
-    for (let i = 1; i < steps; i++) {
-        let t = i / steps;
-        let cx = x0 + (x1 - x0) * t;
-        let cy = y0 + (y1 - y0) * t;
-        if (isWallBlocking(cx, cy, 0, 0)) return false;
-    }
-    return true;
-}
-
 function updateGame() {
-    // Projectiles Verification
+    // Projectiles Verification Core
     for (let i = bullets.length - 1; i >= 0; i--) {
         let b = bullets[i];
-        b.x += Math.cos(b.angle) * b.speed;
-        b.y += Math.sin(b.angle) * b.speed;
+        let nextX = b.x + Math.cos(b.angle) * b.speed;
+        let nextY = b.y + Math.sin(b.angle) * b.speed;
 
-        let bc = Math.floor(b.x / CELL_SIZE);
-        let br = Math.floor(b.y / CELL_SIZE);
+        let bc = Math.floor(nextX / CELL_SIZE);
+        let br = Math.floor(nextY / CELL_SIZE);
         
-        if (bc < 0 || bc >= MAZE_SIZE || br < 0 || br >= MAZE_SIZE || isWallBlocking(b.x, b.y, 0, 0)) {
+        // FIXED: Bullets now pop instantly when crossing vector wall thresholds
+        if (bc < 0 || bc >= MAZE_SIZE || br < 0 || br >= MAZE_SIZE || isWallBlocking(nextX, nextY, Math.cos(b.angle), Math.sin(b.angle))) {
             bullets.splice(i, 1);
             continue;
         }
+
+        b.x = nextX;
+        b.y = nextY;
 
         for (let pId in players) {
             let p = players[pId];
@@ -146,31 +159,28 @@ function updateGame() {
             }
         }
 
-        let speed = p.isHard ? 3.5 : 2.2;
+        let speed = p.isHard ? 3.6 : 2.2;
         let fireCooldown = p.isHard ? 300 : 900;
 
         let targetVisible = closestTarget && hasLineOfSight(p.x, p.y, closestTarget.x, closestTarget.y);
 
         if (targetVisible) {
-            // COMBAT TRACKING ACTIVE MODE
             p.angle = Math.atan2(closestTarget.y - p.y, closestTarget.x - p.x);
             p.vx = Math.cos(p.angle) * speed;
             p.vy = Math.sin(p.angle) * speed;
 
             if (now - p.lastShot > fireCooldown) {
-                bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle + (Math.random() - 0.5) * 0.1, speed: 10 });
+                bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle + (Math.random() - 0.5) * 0.05, speed: 11 });
                 p.lastShot = now;
             }
         } else {
-            // HIGH SPEED AUTONOMOUS CORRIDOR PATROLLING
             if (Math.abs(p.vx) < 0.2 && Math.abs(p.vy) < 0.2 || Math.random() < 0.02) {
-                let randAngle = Math.floor(Math.random() * 4) * (Math.PI / 2); // Snaps perfectly to open corridors
+                let randAngle = Math.floor(Math.random() * 4) * (Math.PI / 2); 
                 p.vx = Math.cos(randAngle) * speed;
                 p.vy = Math.sin(randAngle) * speed;
             }
         }
 
-        // Apply Matrix Movement Verification Layer
         if (!isWallBlocking(p.x + p.vx, p.y, p.vx, 0)) p.x += p.vx; else p.vx = -p.vx * 0.5;
         if (!isWallBlocking(p.x, p.y + p.vy, 0, p.vy)) p.y += p.vy; else p.vy = -p.vy * 0.5;
         
@@ -200,7 +210,7 @@ io.on('connection', (socket) => {
     socket.on('shoot', () => {
         let p = players[socket.id];
         if (!p) return;
-        bullets.push({ ownerId: socket.id, x: p.x, y: p.y, angle: p.angle, speed: 10 });
+        bullets.push({ ownerId: socket.id, x: p.x, y: p.y, angle: p.angle, speed: 11 });
     });
 
     socket.on('disconnect', () => { delete players[socket.id]; });

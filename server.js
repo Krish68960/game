@@ -42,7 +42,6 @@ const maze = generateMaze(MAZE_SIZE);
 
 const namesList = ["Ghost", "Shadow", "Viper", "Phoenix", "Titan", "Specter", "Reaper", "Alpha", "Omega", "Hunter", "Rogue", "Blaze", "Frost", "Wolf", "Ninja", "Slayer", "Apex", "Vortex", "Kratos", "Zeus", "Hazard", "Cipher", "Bullet", "Sniper", "Rex"];
 
-// FIXED: Generates an entirely unique, randomized dynamic tag combination every single execution call
 function getRandomName(prefix = "") {
     const baseName = namesList[Math.floor(Math.random() * namesList.length)];
     const randomTag = Math.floor(1000 + Math.random() * 9000);
@@ -72,7 +71,6 @@ function initBots() {
             isBot: true,
             isHard: isHard,
             lastShot: 0,
-            // Added intelligence nodes
             targetX: targetWaypoint.x,
             targetY: targetWaypoint.y,
             stuckTimer: 0
@@ -103,6 +101,24 @@ function checkWallCollision(x, y, radius = 12) {
     return false;
 }
 
+// NEW: Raycasting Line-of-Sight system check. Checks step by step if a wall sits between bot and target.
+function hasLineOfSight(x0, y0, x1, y1) {
+    let dist = Math.hypot(x1 - x0, y1 - y0);
+    let steps = Math.ceil(dist / 15); // Check every 15 pixels along the beam line
+    
+    for (let i = 1; i < steps; i++) {
+        let t = i / steps;
+        let checkX = x0 + (x1 - x0) * t;
+        let checkY = y0 + (y1 - y0) * t;
+        
+        // If the checking laser intersects a solid wall boundary, return false immediately
+        if (checkWallCollision(checkX, checkY, 4)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 function updateGame() {
     // Bullets System
     for (let i = bullets.length - 1; i >= 0; i--) {
@@ -128,15 +144,16 @@ function updateGame() {
         }
     }
 
-    // ADVANCED INTELLIGENT BOT NAVIGATION CORE
+    // ADVANCED HUMAN-LIKE AI CORE
     let now = Date.now();
     for (let id in players) {
         let p = players[id];
         if (!p.isBot) continue;
 
-        // 1. Scan for nearest visible enemy
         let closestTarget = null;
         let minDist = Infinity;
+        
+        // Scan map array for targets
         for (let tId in players) {
             if (tId !== id) {
                 let dist = Math.hypot(players[tId].x - p.x, players[tId].y - p.y);
@@ -145,40 +162,35 @@ function updateGame() {
         }
 
         let speed = p.isHard ? 3.4 : 1.8; 
-        let detectionRange = p.isHard ? 450 : 250;
+        let detectionRange = p.isHard ? 600 : 350;
         let fireCooldown = p.isHard ? 400 : 1300;
 
-        // 2. Determine Action State: Combat vs Free Exploration Map Travelling
+        // Check if nearest player is close AND visible (not hidden behind a maze wall)
+        let targetVisible = false;
         if (closestTarget && minDist < detectionRange) {
-            // COMBAT HUNTING: Lock orientation to enemy target
+            targetVisible = hasLineOfSight(p.x, p.y, closestTarget.x, closestTarget.y);
+        }
+
+        if (closestTarget && targetVisible) {
+            // TARGET VISIBLE CODE: Face player, lock tracking angle, chase and attack
             p.angle = Math.atan2(closestTarget.y - p.y, closestTarget.x - p.x);
             
-            let nextX = p.x + Math.cos(p.angle) * speed;
-            let nextY = p.y + Math.sin(p.angle) * speed;
+            let moveX = Math.cos(p.angle) * speed;
+            let moveY = Math.sin(p.angle) * speed;
             
-            if (!checkWallCollision(nextX, nextY)) {
-                p.x = nextX; p.y = nextY;
-                p.stuckTimer = 0;
-            } else {
-                // Smart Corner Sliding: If blocked straight ahead, attempt to move diagonally/sideways to sweep past the wall
-                p.stuckTimer++;
-                let slideAngle = p.angle + (p.stuckTimer % 2 === 0 ? Math.PI / 2 : -Math.PI / 2);
-                let slideX = p.x + Math.cos(slideAngle) * speed;
-                let slideY = p.y + Math.sin(slideAngle) * speed;
-                if (!checkWallCollision(slideX, slideY)) { p.x = slideX; p.y = slideY; }
-            }
+            // Sliding Physics: Split axes processing so bots slide along corners cleanly instead of dropping to 0 speed
+            if (!checkWallCollision(p.x + moveX, p.y, 12)) p.x += moveX;
+            if (!checkWallCollision(p.x, p.y + moveY, 12)) p.y += moveY;
 
-            // Fire weapons
             if (now - p.lastShot > fireCooldown) {
                 bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle, speed: p.isHard ? 9 : 6.5 });
                 p.lastShot = now;
             }
         } else {
-            // MAP TRAVELLING: Move intentionally towards active waypoints to explore entire arena maps
+            // EXPLORATION / MAP TRAVELLING MODE: Move intentionally towards clear distant paths
             let distToWaypoint = Math.hypot(p.targetX - p.x, p.targetY - p.y);
             
-            // If waypoint reached or bot gets jammed, roll a completely new location on the map layout
-            if (distToWaypoint < 20 || p.stuckTimer > 45) {
+            if (distToWaypoint < 30 || p.stuckTimer > 60) {
                 let newNode = getRandomWaypoint();
                 p.targetX = newNode.x;
                 p.targetY = newNode.y;
@@ -186,19 +198,23 @@ function updateGame() {
             }
 
             p.angle = Math.atan2(p.targetY - p.y, p.targetX - p.x);
-            let nextX = p.x + Math.cos(p.angle) * speed;
-            let nextY = p.y + Math.sin(p.angle) * speed;
+            let moveX = Math.cos(p.angle) * speed;
+            let moveY = Math.sin(p.angle) * speed;
 
-            if (!checkWallCollision(nextX, nextY)) {
-                p.x = nextX; p.y = nextY;
-                if(Math.random() < 0.02) p.stuckTimer = 0; // standard reset
-            } else {
+            let movedX = false;
+            let movedY = false;
+
+            if (!checkWallCollision(p.x + moveX, p.y, 12)) { p.x += moveX; movedX = true; }
+            if (!checkWallCollision(p.x, p.y + moveY, 12)) { p.y += moveY; movedY = true; }
+
+            if (!movedX && !movedY) {
                 p.stuckTimer++;
-                // Scatter alternate paths when hitting wall boundaries to navigate corridors cleanly
+                // If completely blocked on both axes, turn around to look down the open path corridor
                 p.angle += (Math.random() > 0.5 ? Math.PI / 2 : -Math.PI / 2);
-                let altX = p.x + Math.cos(p.angle) * speed;
-                let altY = p.y + Math.sin(p.angle) * speed;
-                if (!checkWallCollision(altX, altY)) { p.x = altX; p.y = altY; }
+                p.targetX = p.x + Math.cos(p.angle) * 200;
+                p.targetY = p.y + Math.sin(p.angle) * 200;
+            } else {
+                if (Math.random() < 0.02) p.stuckTimer = 0;
             }
         }
     }
@@ -217,9 +233,13 @@ io.on('connection', (socket) => {
         let p = players[socket.id];
         if (!p) return;
         p.angle = data.angle;
-        let nextX = p.x + Math.cos(p.angle) * data.speed;
-        let nextY = p.y + Math.sin(p.angle) * data.speed;
-        if (!checkWallCollision(nextX, nextY)) { p.x = nextX; p.y = nextY; }
+        
+        let moveX = Math.cos(p.angle) * data.speed;
+        let moveY = Math.sin(p.angle) * data.speed;
+        
+        // Apply sliding collision checks for manual human controller handling too
+        if (!checkWallCollision(p.x + moveX, p.y, 12)) p.x += moveX;
+        if (!checkWallCollision(p.x, p.y + moveY, 12)) p.y += moveY;
     });
 
     socket.on('shoot', () => {

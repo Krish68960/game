@@ -5,7 +5,15 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+
+// FIX: Relaxed CORS and absolute paths to prevent browser connection blocks
+const io = new Server(server, { 
+    cors: { 
+        origin: "*",
+        methods: ["GET", "POST"]
+    },
+    transports: ['websocket', 'polling'] 
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => { res.sendFile(path.join(__dirname, 'public', 'index.html')); });
@@ -102,12 +110,10 @@ function updateGame() {
         }
     }
 
-    // BOT AI LOOP ONLY
+    // BOT AI LOOP
     let now = Date.now();
     for (let id in players) {
         let p = players[id];
-        
-        // Skip human players (they move themselves!)
         if (!p.isBot) continue;
 
         let closestTarget = null;
@@ -149,9 +155,10 @@ setInterval(updateGame, 1000 / 30);
 io.on('connection', (socket) => {
     const spawn = getValidSpawnPos();
     players[socket.id] = { id: socket.id, name: getRandomName(), x: spawn.x, y: spawn.y, angle: 0, health: 5, isBot: false };
+    
+    // Explicit initialization push
     socket.emit('init', { maze, size: MAZE_SIZE, cellSize: CELL_SIZE, id: socket.id });
 
-    // Handle Human Player Movement Inputs
     socket.on('move', (data) => {
         let p = players[socket.id];
         if (!p) return;
@@ -161,7 +168,6 @@ io.on('connection', (socket) => {
         if (!checkWallCollision(nextX, nextY)) { p.x = nextX; p.y = nextY; }
     });
 
-    // Handle Human Player Shooting Inputs
     socket.on('shoot', () => {
         let p = players[socket.id];
         if (!p) return;
@@ -172,4 +178,4 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Manual Control server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));

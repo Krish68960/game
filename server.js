@@ -102,10 +102,13 @@ function updateGame() {
         }
     }
 
-    // AUTOPILOT AI FOR EVERYONE (Bots & Human Viewers)
+    // BOT AI LOOP ONLY
     let now = Date.now();
     for (let id in players) {
         let p = players[id];
+        
+        // Skip human players (they move themselves!)
+        if (!p.isBot) continue;
 
         let closestTarget = null;
         let minDist = Infinity;
@@ -116,10 +119,9 @@ function updateGame() {
             }
         }
 
-        // Stats: Ultra Bots (Hard), Human Players (Medium), Normal Bots (Easy)
-        let speed = p.isHard ? 3.5 : (!p.isBot ? 2.5 : 1.8); 
-        let detectionRange = p.isHard ? 500 : (!p.isBot ? 350 : 250);
-        let fireCooldown = p.isHard ? 400 : (!p.isBot ? 800 : 1300);
+        let speed = p.isHard ? 3.5 : 1.8; 
+        let detectionRange = p.isHard ? 500 : 250;
+        let fireCooldown = p.isHard ? 400 : 1300;
 
         if (closestTarget && minDist < detectionRange) {
             p.angle = Math.atan2(closestTarget.y - p.y, closestTarget.x - p.x);
@@ -128,7 +130,7 @@ function updateGame() {
             if (!checkWallCollision(nextX, nextY)) { p.x = nextX; p.y = nextY; }
 
             if (now - p.lastShot > fireCooldown) {
-                bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle, speed: p.isHard ? 8.5 : (!p.isBot ? 7.5 : 6) });
+                bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle, speed: p.isHard ? 8.5 : 6 });
                 p.lastShot = now;
             }
         } else {
@@ -146,12 +148,28 @@ setInterval(updateGame, 1000 / 30);
 
 io.on('connection', (socket) => {
     const spawn = getValidSpawnPos();
-    // Human connects, gets assigned a unit, but server controls it
-    players[socket.id] = { id: socket.id, name: getRandomName(), x: spawn.x, y: spawn.y, angle: 0, health: 5, isBot: false, lastShot: 0 };
+    players[socket.id] = { id: socket.id, name: getRandomName(), x: spawn.x, y: spawn.y, angle: 0, health: 5, isBot: false };
     socket.emit('init', { maze, size: MAZE_SIZE, cellSize: CELL_SIZE, id: socket.id });
+
+    // Handle Human Player Movement Inputs
+    socket.on('move', (data) => {
+        let p = players[socket.id];
+        if (!p) return;
+        p.angle = data.angle;
+        let nextX = p.x + Math.cos(p.angle) * data.speed;
+        let nextY = p.y + Math.sin(p.angle) * data.speed;
+        if (!checkWallCollision(nextX, nextY)) { p.x = nextX; p.y = nextY; }
+    });
+
+    // Handle Human Player Shooting Inputs
+    socket.on('shoot', () => {
+        let p = players[socket.id];
+        if (!p) return;
+        bullets.push({ ownerId: socket.id, x: p.x, y: p.y, angle: p.angle, speed: 8 });
+    });
 
     socket.on('disconnect', () => { delete players[socket.id]; });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Auto-Battler server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Manual Control server running on port ${PORT}`));

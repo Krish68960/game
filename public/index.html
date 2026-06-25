@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>MAZE ARENA - LIVE STREAM EDITION</title>
+    <title>MAZE ARENA</title>
     <script src="/socket.io/socket.io.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
     <style>
@@ -22,7 +22,6 @@
         #playerHealth { font-size: 18px; color: #ff0055; margin-bottom: 4px; letter-spacing: 2px;}
         .alive-count { font-size: 13px; color: #00d2ff; letter-spacing: 1px; }
 
-        /* UI Controls Restored */
         #controls-container {
             position: absolute; bottom: 30px; left: 0; width: 100%;
             display: flex; justify-content: space-between; padding: 0 40px;
@@ -34,7 +33,7 @@
             border-radius: 14px; color: #00d2ff; font-size: 20px; display: flex;
             align-items: center; justify-content: center; cursor: pointer; transition: background 0.1s;
         }
-        .control-btn:active { background: rgba(0, 210, 255, 0.3); color: #fff; transform: scale(0.95); }
+        .control-btn:active { background: rgba(0, 210, 255, 0.3); color: #fff; }
         #btn-up { grid-column: 2; }
         #btn-left { grid-column: 1; grid-row: 2; }
         #btn-down { grid-column: 2; grid-row: 2; }
@@ -46,7 +45,6 @@
             font-family: 'Orbitron', sans-serif; font-size: 16px; font-weight: 700;
             box-shadow: 0 0 15px rgba(255, 0, 85, 0.4);
         }
-        #btn-shoot:active { transform: scale(0.9); }
 
         #death-screen {
             display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
@@ -60,7 +58,7 @@
 <body>
 
 <div id="hud">
-    <div id="playerName">LOADING DATA...</div>
+    <div id="playerName">CONNECTING...</div>
     <div id="playerHealth">HP: 5 / 5</div>
     <div class="alive-count" id="aliveCounter">SURVIVORS: 0</div>
 </div>
@@ -83,7 +81,11 @@
 </div>
 
 <script>
-    const socket = io();
+    // FIX: Explicitly forcing standard tracking so it doesn't default to broken offline paths
+    const socket = io(window.location.origin, {
+        transports: ['websocket', 'polling']
+    });
+
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
     const deathScreen = document.getElementById('death-screen');
@@ -95,27 +97,26 @@
     let gameState = { players: {}, bullets: [] };
     let mazePathCache = null;
 
-    // Movement controls tracking
     let touchMove = { up: false, down: false, left: false, right: false };
     let keys = {};
     window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
     window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
 
-    // Bind UI Buttons
     setupTouchButton('btn-up', 'up');
     setupTouchButton('btn-down', 'down');
     setupTouchButton('btn-left', 'left');
     setupTouchButton('btn-right', 'right');
     
+    // Multi-event support for both mobile tap and computer clicks
     document.getElementById('btn-shoot').addEventListener('touchstart', (e) => { e.preventDefault(); socket.emit('shoot'); });
-    document.getElementById('btn-shoot').addEventListener('mousedown', () => socket.emit('shoot'));
+    document.getElementById('btn-shoot').addEventListener('mousedown', (e) => { e.preventDefault(); socket.emit('shoot'); });
 
     function setupTouchButton(id, direction) {
         const btn = document.getElementById(id);
         btn.addEventListener('touchstart', (e) => { e.preventDefault(); touchMove[direction] = true; });
-        btn.addEventListener('touchend', () => touchMove[direction] = false);
-        btn.addEventListener('mousedown', () => touchMove[direction] = true);
-        btn.addEventListener('mouseup', () => touchMove[direction] = false);
+        btn.addEventListener('touchend', (e) => { e.preventDefault(); touchMove[direction] = false; });
+        btn.addEventListener('mousedown', (e) => { e.preventDefault(); touchMove[direction] = true; });
+        btn.addEventListener('mouseup', (e) => { e.preventDefault(); touchMove[direction] = false; });
     }
 
     socket.on('init', (data) => { 
@@ -154,7 +155,6 @@
         document.getElementById('playerHealth').innerText = "HP: " + me.health + " / 5";
         document.getElementById('aliveCounter').innerText = `ACTIVE SURVIVORS: ${Object.keys(gameState.players).length}`;
 
-        // Send Movement Input to Server
         let dx = 0, dy = 0;
         if (keys['w'] || keys['arrowup'] || touchMove.up) dy = -1;
         if (keys['s'] || keys['arrowdown'] || touchMove.down) dy = 1;
@@ -165,7 +165,6 @@
             socket.emit('move', { angle: Math.atan2(dy, dx), speed: 5 });
         }
 
-        // Camera Math
         let camX = Math.floor(canvas.width / 2 - me.x);
         let camY = Math.floor(canvas.height / 2 - me.y);
         ctx.save();
@@ -180,7 +179,6 @@
             ctx.beginPath(); ctx.arc(b.x, b.y, 3, 0, Math.PI * 2); ctx.fill();
         }
 
-        // Uniform Player Appearance (Anonymous Cyan/White theme)
         for (let id in gameState.players) {
             let p = gameState.players[id];
             

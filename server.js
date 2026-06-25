@@ -40,7 +40,7 @@ function generateMaze(size) {
 }
 const maze = generateMaze(MAZE_SIZE);
 
-const namesList = ["Ghost", "Shadow", "Viper", "Phoenix", "Titan", "Specter", "Reaper", "Alpha", "Omega", "Hunter", "Rogue", "Blaze", "Frost", "Wolf", "Ninja", "Slayer", "Apex", "Vortex", "Kratos", "Zeus", "Hazard", "Cipher", "Bullet", "Sniper", "Rex"];
+const namesList = ["Ghost", "Shadow", "Viper", "Phoenix", "Titan", "Specter", "Reaper", "Alpha", "Omega", "Hunter", "Rogue", "Blaze", "Frost", "Wolf", "Ninja", "Slayer", "Apex", "Vortex", "Hazard", "Cipher", "Bullet", "Sniper"];
 
 function getRandomName(prefix = "") {
     const baseName = namesList[Math.floor(Math.random() * namesList.length)];
@@ -48,18 +48,59 @@ function getRandomName(prefix = "") {
     return `${prefix}${baseName}#${randomTag}`;
 }
 
-function getRandomWaypoint() {
+// FIX 1: Grid-Centered Spawning. Forces entities to start perfectly in the center of an open hallway cell.
+function getGridCenteredSpawn() {
     let r = Math.floor(Math.random() * MAZE_SIZE);
     let c = Math.floor(Math.random() * MAZE_SIZE);
-    return { x: c * CELL_SIZE + CELL_SIZE / 2, y: r * CELL_SIZE + CELL_SIZE / 2 };
+    return { 
+        x: (c * CELL_SIZE) + (CELL_SIZE / 2), 
+        y: (r * CELL_SIZE) + (CELL_SIZE / 2) 
+    };
+}
+
+// FIX 2: Re-engineered completely clean wall boundary collision. Removes complex float radius traps.
+function checkWallCollision(x, y, radius = 10) {
+    if (x - radius < 0 || x + radius > MAP_SIZE || y - radius < 0 || y + radius > MAP_SIZE) return true;
+
+    let cellX = Math.floor(x / CELL_SIZE);
+    let cellY = Math.floor(y / CELL_SIZE);
+    
+    if (cellX < 0 || cellX >= MAZE_SIZE || cellY < 0 || cellY >= MAZE_SIZE) return true;
+    let cell = maze[cellY][cellX];
+
+    let cellLeft = cellX * CELL_SIZE;
+    let cellRight = cellLeft + CELL_SIZE;
+    let cellTop = cellY * CELL_SIZE;
+    let cellBottom = cellTop + CELL_SIZE;
+
+    // Strict boundary block checks
+    if (cell.w && (x - radius) < (cellLeft + 4)) return true;
+    if (cell.e && (x + radius) > (cellRight - 4)) return true;
+    if (cell.n && (y - radius) < (cellTop + 4)) return true;
+    if (cell.s && (y + radius) > (cellBottom - 4)) return true;
+
+    return false;
+}
+
+function hasLineOfSight(x0, y0, x1, y1) {
+    let dist = Math.hypot(x1 - x0, y1 - y0);
+    let steps = Math.ceil(dist / 20); 
+    for (let i = 1; i < steps; i++) {
+        let t = i / steps;
+        if (checkWallCollision(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, 5)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 function initBots() {
+    players = {}; // Reset container cleanly
     for (let i = 0; i < 25; i++) {
         const isHard = i >= 20; 
         const botId = `bot_${i}_${Date.now()}`;
-        const spawn = getRandomWaypoint();
-        const targetWaypoint = getRandomWaypoint();
+        const spawn = getGridCenteredSpawn();
+        const targetWaypoint = getGridCenteredSpawn();
         
         players[botId] = {
             id: botId,
@@ -79,54 +120,14 @@ function initBots() {
 }
 initBots();
 
-function checkWallCollision(x, y, radius = 12) {
-    if (x - radius < 0 || x + radius > MAP_SIZE || y - radius < 0 || y + radius > MAP_SIZE) return true;
-
-    let cellX = Math.floor(x / CELL_SIZE);
-    let cellY = Math.floor(y / CELL_SIZE);
-    
-    if (cellX < 0 || cellX >= MAZE_SIZE || cellY < 0 || cellY >= MAZE_SIZE) return true;
-    let cell = maze[cellY][cellX];
-
-    let leftBound = cellX * CELL_SIZE;
-    let rightBound = leftBound + CELL_SIZE;
-    let topBound = cellY * CELL_SIZE;
-    let bottomBound = topBound + CELL_SIZE;
-
-    if (cell.w && (x - radius) < leftBound) return true;
-    if (cell.e && (x + radius) > rightBound) return true;
-    if (cell.n && (y - radius) < topBound) return true;
-    if (cell.s && (y + radius) > bottomBound) return true;
-
-    return false;
-}
-
-// NEW: Raycasting Line-of-Sight system check. Checks step by step if a wall sits between bot and target.
-function hasLineOfSight(x0, y0, x1, y1) {
-    let dist = Math.hypot(x1 - x0, y1 - y0);
-    let steps = Math.ceil(dist / 15); // Check every 15 pixels along the beam line
-    
-    for (let i = 1; i < steps; i++) {
-        let t = i / steps;
-        let checkX = x0 + (x1 - x0) * t;
-        let checkY = y0 + (y1 - y0) * t;
-        
-        // If the checking laser intersects a solid wall boundary, return false immediately
-        if (checkWallCollision(checkX, checkY, 4)) {
-            return false;
-        }
-    }
-    return true;
-}
-
 function updateGame() {
-    // Bullets System
+    // Bullets Core
     for (let i = bullets.length - 1; i >= 0; i--) {
         let b = bullets[i];
         b.x += Math.cos(b.angle) * b.speed;
         b.y += Math.sin(b.angle) * b.speed;
 
-        if (checkWallCollision(b.x, b.y, 4)) {
+        if (checkWallCollision(b.x, b.y, 3)) {
             bullets.splice(i, 1);
             continue;
         }
@@ -134,7 +135,7 @@ function updateGame() {
         for (let pId in players) {
             let p = players[pId];
             if (pId !== b.ownerId) {
-                if (Math.hypot(p.x - b.x, p.y - b.y) < 18) {
+                if (Math.hypot(p.x - b.x, p.y - b.y) < 16) {
                     p.health -= 1;
                     bullets.splice(i, 1);
                     if (p.health <= 0) { delete players[pId]; }
@@ -144,7 +145,7 @@ function updateGame() {
         }
     }
 
-    // ADVANCED HUMAN-LIKE AI CORE
+    // BOT AI MOVEMENT CORE
     let now = Date.now();
     for (let id in players) {
         let p = players[id];
@@ -152,8 +153,6 @@ function updateGame() {
 
         let closestTarget = null;
         let minDist = Infinity;
-        
-        // Scan map array for targets
         for (let tId in players) {
             if (tId !== id) {
                 let dist = Math.hypot(players[tId].x - p.x, players[tId].y - p.y);
@@ -161,39 +160,37 @@ function updateGame() {
             }
         }
 
-        let speed = p.isHard ? 3.4 : 1.8; 
-        let detectionRange = p.isHard ? 600 : 350;
-        let fireCooldown = p.isHard ? 400 : 1300;
+        let speed = p.isHard ? 3.0 : 1.6; 
+        let detectionRange = p.isHard ? 500 : 250;
+        let fireCooldown = p.isHard ? 450 : 1400;
 
-        // Check if nearest player is close AND visible (not hidden behind a maze wall)
         let targetVisible = false;
         if (closestTarget && minDist < detectionRange) {
             targetVisible = hasLineOfSight(p.x, p.y, closestTarget.x, closestTarget.y);
         }
 
         if (closestTarget && targetVisible) {
-            // TARGET VISIBLE CODE: Face player, lock tracking angle, chase and attack
+            // TARGET ACQUIRED MODE
             p.angle = Math.atan2(closestTarget.y - p.y, closestTarget.x - p.x);
-            
             let moveX = Math.cos(p.angle) * speed;
             let moveY = Math.sin(p.angle) * speed;
             
-            // Sliding Physics: Split axes processing so bots slide along corners cleanly instead of dropping to 0 speed
-            if (!checkWallCollision(p.x + moveX, p.y, 12)) p.x += moveX;
-            if (!checkWallCollision(p.x, p.y + moveY, 12)) p.y += moveY;
+            // Axis separation sliding logic
+            if (!checkWallCollision(p.x + moveX, p.y, 10)) p.x += moveX;
+            if (!checkWallCollision(p.x, p.y + moveY, 10)) p.y += moveY;
 
             if (now - p.lastShot > fireCooldown) {
-                bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle, speed: p.isHard ? 9 : 6.5 });
+                bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle, speed: 7.5 });
                 p.lastShot = now;
             }
         } else {
-            // EXPLORATION / MAP TRAVELLING MODE: Move intentionally towards clear distant paths
+            // ADVANCED MAP TRAVEL MODE
             let distToWaypoint = Math.hypot(p.targetX - p.x, p.targetY - p.y);
             
-            if (distToWaypoint < 30 || p.stuckTimer > 60) {
-                let newNode = getRandomWaypoint();
-                p.targetX = newNode.x;
-                p.targetY = newNode.y;
+            if (distToWaypoint < 25 || p.stuckTimer > 40) {
+                let nextNode = getGridCenteredSpawn();
+                p.targetX = nextNode.x;
+                p.targetY = nextNode.y;
                 p.stuckTimer = 0;
             }
 
@@ -201,20 +198,19 @@ function updateGame() {
             let moveX = Math.cos(p.angle) * speed;
             let moveY = Math.sin(p.angle) * speed;
 
-            let movedX = false;
-            let movedY = false;
+            let successX = false;
+            let successY = false;
 
-            if (!checkWallCollision(p.x + moveX, p.y, 12)) { p.x += moveX; movedX = true; }
-            if (!checkWallCollision(p.x, p.y + moveY, 12)) { p.y += moveY; movedY = true; }
+            if (!checkWallCollision(p.x + moveX, p.y, 10)) { p.x += moveX; successX = true; }
+            if (!checkWallCollision(p.x, p.y + moveY, 10)) { p.y += moveY; successY = true; }
 
-            if (!movedX && !movedY) {
+            if (!successX && !successY) {
                 p.stuckTimer++;
-                // If completely blocked on both axes, turn around to look down the open path corridor
+                // If hitting a hard corner block, rotate exactly 90 degrees to immediately exit the corner pocket
                 p.angle += (Math.random() > 0.5 ? Math.PI / 2 : -Math.PI / 2);
-                p.targetX = p.x + Math.cos(p.angle) * 200;
-                p.targetY = p.y + Math.sin(p.angle) * 200;
-            } else {
-                if (Math.random() < 0.02) p.stuckTimer = 0;
+                let escapeNode = getGridCenteredSpawn();
+                p.targetX = escapeNode.x;
+                p.targetY = escapeNode.y;
             }
         }
     }
@@ -225,7 +221,7 @@ function updateGame() {
 setInterval(updateGame, 1000 / 30);
 
 io.on('connection', (socket) => {
-    let spawn = getRandomWaypoint();
+    let spawn = getGridCenteredSpawn();
     players[socket.id] = { id: socket.id, name: getRandomName(), x: spawn.x, y: spawn.y, angle: 0, health: 5, isBot: false };
     socket.emit('init', { maze, size: MAZE_SIZE, cellSize: CELL_SIZE, id: socket.id });
 
@@ -233,13 +229,10 @@ io.on('connection', (socket) => {
         let p = players[socket.id];
         if (!p) return;
         p.angle = data.angle;
-        
         let moveX = Math.cos(p.angle) * data.speed;
         let moveY = Math.sin(p.angle) * data.speed;
-        
-        // Apply sliding collision checks for manual human controller handling too
-        if (!checkWallCollision(p.x + moveX, p.y, 12)) p.x += moveX;
-        if (!checkWallCollision(p.x, p.y + moveY, 12)) p.y += moveY;
+        if (!checkWallCollision(p.x + moveX, p.y, 10)) p.x += moveX;
+        if (!checkWallCollision(p.x, p.y + moveY, 10)) p.y += moveY;
     });
 
     socket.on('shoot', () => {
@@ -252,4 +245,4 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Smart pathing system online on port ${PORT}`));
+server.listen(PORT, () => console.log(`Crash-proof server running on port ${PORT}`));

@@ -7,7 +7,14 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
-app.use(express.static('public')); // Serves frontend files from a 'public' directory
+const path = require('path');
+
+// Replace your old app.use(express.static('public')) line with these two:
+app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 // --- GAME CONFIG & STATE ---
 const MAZE_SIZE = 15; // 15x15 grid of cells

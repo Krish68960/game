@@ -40,13 +40,16 @@ function generateMaze(size) {
 }
 const maze = generateMaze(MAZE_SIZE);
 
-const namesList = ["Ghost", "Shadow", "Viper", "Phoenix", "Titan", "Specter", "Reaper", "Alpha", "Omega", "Hunter", "Rogue", "Blaze", "Frost", "Wolf", "Ninja", "Slayer"];
+const namesList = ["Ghost", "Shadow", "Viper", "Phoenix", "Titan", "Specter", "Reaper", "Alpha", "Omega", "Hunter", "Rogue", "Blaze", "Frost", "Wolf", "Ninja", "Slayer", "Apex", "Vortex", "Kratos", "Zeus", "Hazard", "Cipher", "Bullet", "Sniper", "Rex"];
+
+// FIXED: Generates an entirely unique, randomized dynamic tag combination every single execution call
 function getRandomName(prefix = "") {
-    return prefix + namesList[Math.floor(Math.random() * namesList.length)] + "#" + Math.floor(1000 + Math.random() * 9000);
+    const baseName = namesList[Math.floor(Math.random() * namesList.length)];
+    const randomTag = Math.floor(1000 + Math.random() * 9000);
+    return `${prefix}${baseName}#${randomTag}`;
 }
 
-function getValidSpawnPos() {
-    // Spawns them precisely in the center of random maze paths so they don't stick to walls on start
+function getRandomWaypoint() {
     let r = Math.floor(Math.random() * MAZE_SIZE);
     let c = Math.floor(Math.random() * MAZE_SIZE);
     return { x: c * CELL_SIZE + CELL_SIZE / 2, y: r * CELL_SIZE + CELL_SIZE / 2 };
@@ -56,7 +59,9 @@ function initBots() {
     for (let i = 0; i < 25; i++) {
         const isHard = i >= 20; 
         const botId = `bot_${i}_${Date.now()}`;
-        const spawn = getValidSpawnPos();
+        const spawn = getRandomWaypoint();
+        const targetWaypoint = getRandomWaypoint();
+        
         players[botId] = {
             id: botId,
             name: getRandomName(isHard ? "ULTRA_" : ""),
@@ -66,13 +71,16 @@ function initBots() {
             health: 5,
             isBot: true,
             isHard: isHard,
-            lastShot: 0
+            lastShot: 0,
+            // Added intelligence nodes
+            targetX: targetWaypoint.x,
+            targetY: targetWaypoint.y,
+            stuckTimer: 0
         };
     }
 }
 initBots();
 
-// FIXED: Mathematical alignment algorithm completely prevents players/bots from getting trapped in wall physics
 function checkWallCollision(x, y, radius = 12) {
     if (x - radius < 0 || x + radius > MAP_SIZE || y - radius < 0 || y + radius > MAP_SIZE) return true;
 
@@ -96,7 +104,7 @@ function checkWallCollision(x, y, radius = 12) {
 }
 
 function updateGame() {
-    // Projectile Engine
+    // Bullets System
     for (let i = bullets.length - 1; i >= 0; i--) {
         let b = bullets[i];
         b.x += Math.cos(b.angle) * b.speed;
@@ -120,12 +128,13 @@ function updateGame() {
         }
     }
 
-    // BOT AI RUNTIME LOOP
+    // ADVANCED INTELLIGENT BOT NAVIGATION CORE
     let now = Date.now();
     for (let id in players) {
         let p = players[id];
         if (!p.isBot) continue;
 
+        // 1. Scan for nearest visible enemy
         let closestTarget = null;
         let minDist = Infinity;
         for (let tId in players) {
@@ -135,36 +144,61 @@ function updateGame() {
             }
         }
 
-        let speed = p.isHard ? 3.2 : 1.6; 
-        let detectionRange = p.isHard ? 600 : 300;
-        let fireCooldown = p.isHard ? 450 : 1400;
+        let speed = p.isHard ? 3.4 : 1.8; 
+        let detectionRange = p.isHard ? 450 : 250;
+        let fireCooldown = p.isHard ? 400 : 1300;
 
+        // 2. Determine Action State: Combat vs Free Exploration Map Travelling
         if (closestTarget && minDist < detectionRange) {
+            // COMBAT HUNTING: Lock orientation to enemy target
             p.angle = Math.atan2(closestTarget.y - p.y, closestTarget.x - p.x);
             
             let nextX = p.x + Math.cos(p.angle) * speed;
             let nextY = p.y + Math.sin(p.angle) * speed;
             
-            // If path forward is clear, step forward. If wall detected, pivot angle to slide past corners cleanly
             if (!checkWallCollision(nextX, nextY)) {
                 p.x = nextX; p.y = nextY;
+                p.stuckTimer = 0;
             } else {
-                p.angle += (Math.random() > 0.5 ? 1 : -1) * 0.5;
+                // Smart Corner Sliding: If blocked straight ahead, attempt to move diagonally/sideways to sweep past the wall
+                p.stuckTimer++;
+                let slideAngle = p.angle + (p.stuckTimer % 2 === 0 ? Math.PI / 2 : -Math.PI / 2);
+                let slideX = p.x + Math.cos(slideAngle) * speed;
+                let slideY = p.y + Math.sin(slideAngle) * speed;
+                if (!checkWallCollision(slideX, slideY)) { p.x = slideX; p.y = slideY; }
             }
 
+            // Fire weapons
             if (now - p.lastShot > fireCooldown) {
-                bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle, speed: p.isHard ? 8.5 : 6 });
+                bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle, speed: p.isHard ? 9 : 6.5 });
                 p.lastShot = now;
             }
         } else {
-            // Natural exploration wandering routine
-            if (Math.random() < 0.05) p.angle += (Math.random() - 0.5) * 2;
+            // MAP TRAVELLING: Move intentionally towards active waypoints to explore entire arena maps
+            let distToWaypoint = Math.hypot(p.targetX - p.x, p.targetY - p.y);
+            
+            // If waypoint reached or bot gets jammed, roll a completely new location on the map layout
+            if (distToWaypoint < 20 || p.stuckTimer > 45) {
+                let newNode = getRandomWaypoint();
+                p.targetX = newNode.x;
+                p.targetY = newNode.y;
+                p.stuckTimer = 0;
+            }
+
+            p.angle = Math.atan2(p.targetY - p.y, p.targetX - p.x);
             let nextX = p.x + Math.cos(p.angle) * speed;
             let nextY = p.y + Math.sin(p.angle) * speed;
+
             if (!checkWallCollision(nextX, nextY)) {
                 p.x = nextX; p.y = nextY;
+                if(Math.random() < 0.02) p.stuckTimer = 0; // standard reset
             } else {
-                p.angle += Math.PI * 0.5; // Turn away when bumping walls
+                p.stuckTimer++;
+                // Scatter alternate paths when hitting wall boundaries to navigate corridors cleanly
+                p.angle += (Math.random() > 0.5 ? Math.PI / 2 : -Math.PI / 2);
+                let altX = p.x + Math.cos(p.angle) * speed;
+                let altY = p.y + Math.sin(p.angle) * speed;
+                if (!checkWallCollision(altX, altY)) { p.x = altX; p.y = altY; }
             }
         }
     }
@@ -175,7 +209,7 @@ function updateGame() {
 setInterval(updateGame, 1000 / 30);
 
 io.on('connection', (socket) => {
-    const spawn = getValidSpawnPos();
+    let spawn = getRandomWaypoint();
     players[socket.id] = { id: socket.id, name: getRandomName(), x: spawn.x, y: spawn.y, angle: 0, health: 5, isBot: false };
     socket.emit('init', { maze, size: MAZE_SIZE, cellSize: CELL_SIZE, id: socket.id });
 
@@ -198,4 +232,4 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Smart pathing system online on port ${PORT}`));

@@ -20,9 +20,11 @@ const MAP_SIZE = MAZE_SIZE * CELL_SIZE;
 let players = {};
 let bullets = [];
 
-function generateMaze(size) {
+// NEW: Generates a high-flow Braided Arena Maze (breaks dead ends to allow maximum bot movement)
+function generateArenaMaze(size) {
     let grid = Array(size).fill(null).map(() => Array(size).fill(null).map(() => ({ n: true, s: true, e: true, w: true })));
     let visited = Array(size).fill(null).map(() => Array(size).fill(false));
+    
     function dfs(r, c) {
         visited[r][c] = true;
         let dirs = [['n', -1, 0, 's'], ['s', 1, 0, 'n'], ['e', 0, 1, 'w'], ['w', 0, -1, 'e']].sort(() => Math.random() - 0.5);
@@ -36,31 +38,35 @@ function generateMaze(size) {
         }
     }
     dfs(0, 0);
+
+    // BRAIDING PROCESS: Permanently tear down 40% of the walls to create open corridors and loop circuits
+    for (let r = 1; r < size - 1; r++) {
+        for (let c = 1; c < size - 1; c++) {
+            if (Math.random() < 0.40) {
+                grid[r][c].n = false; grid[r-1][c].s = false;
+                grid[r][c].w = false; grid[r][c-1].e = false;
+            }
+        }
+    }
     return grid;
 }
-const maze = generateMaze(MAZE_SIZE);
+const maze = generateArenaMaze(MAZE_SIZE);
 
-const namesList = ["Ghost", "Shadow", "Viper", "Phoenix", "Titan", "Specter", "Reaper", "Alpha", "Omega", "Hunter", "Rogue", "Blaze", "Frost", "Wolf", "Ninja", "Slayer", "Apex", "Vortex", "Hazard", "Cipher", "Bullet", "Sniper"];
+const namesList = ["Sniper", "Viper", "Slayer", "Phoenix", "Titan", "Specter", "Reaper", "Alpha", "Omega", "Hunter", "Rogue", "Blaze", "Frost", "Wolf", "Ninja", "Kratos", "Zeus", "Hazard", "Cipher", "Bullet", "Ghost", "Shadow"];
 
 function getRandomName(prefix = "") {
-    const baseName = namesList[Math.floor(Math.random() * namesList.length)];
-    const randomTag = Math.floor(1000 + Math.random() * 9000);
-    return `${prefix}${baseName}#${randomTag}`;
+    return `${prefix}${namesList[Math.floor(Math.random() * namesList.length)]}#${Math.floor(1000 + Math.random() * 9000)}`;
 }
 
-// FIX 1: Grid-Centered Spawning. Forces entities to start perfectly in the center of an open hallway cell.
 function getGridCenteredSpawn() {
     let r = Math.floor(Math.random() * MAZE_SIZE);
     let c = Math.floor(Math.random() * MAZE_SIZE);
-    return { 
-        x: (c * CELL_SIZE) + (CELL_SIZE / 2), 
-        y: (r * CELL_SIZE) + (CELL_SIZE / 2) 
-    };
+    return { x: (c * CELL_SIZE) + 50, y: (r * CELL_SIZE) + 50 };
 }
 
-// FIX 2: Re-engineered completely clean wall boundary collision. Removes complex float radius traps.
-function checkWallCollision(x, y, radius = 10) {
-    if (x - radius < 0 || x + radius > MAP_SIZE || y - radius < 0 || y + radius > MAP_SIZE) return true;
+// ULTRA LIGHTWEIGHT COLLISION: Lowered radius to 8px so bots never get clipped or squeezed by narrow corners
+function checkWallCollision(x, y, radius = 8) {
+    if (x - radius < 4 || x + radius > MAP_SIZE - 4 || y - radius < 4 || y + radius > MAP_SIZE - 4) return true;
 
     let cellX = Math.floor(x / CELL_SIZE);
     let cellY = Math.floor(y / CELL_SIZE);
@@ -73,29 +79,26 @@ function checkWallCollision(x, y, radius = 10) {
     let cellTop = cellY * CELL_SIZE;
     let cellBottom = cellTop + CELL_SIZE;
 
-    // Strict boundary block checks
-    if (cell.w && (x - radius) < (cellLeft + 4)) return true;
-    if (cell.e && (x + radius) > (cellRight - 4)) return true;
-    if (cell.n && (y - radius) < (cellTop + 4)) return true;
-    if (cell.s && (y + radius) > (cellBottom - 4)) return true;
+    if (cell.w && (x - radius) < (cellLeft + 2)) return true;
+    if (cell.e && (x + radius) > (cellRight - 2)) return true;
+    if (cell.n && (y - radius) < (cellTop + 2)) return true;
+    if (cell.s && (y + radius) > (cellBottom - 2)) return true;
 
     return false;
 }
 
 function hasLineOfSight(x0, y0, x1, y1) {
     let dist = Math.hypot(x1 - x0, y1 - y0);
-    let steps = Math.ceil(dist / 20); 
+    let steps = Math.ceil(dist / 25); 
     for (let i = 1; i < steps; i++) {
         let t = i / steps;
-        if (checkWallCollision(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, 5)) {
-            return false;
-        }
+        if (checkWallCollision(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, 4)) return false;
     }
     return true;
 }
 
 function initBots() {
-    players = {}; // Reset container cleanly
+    players = {};
     for (let i = 0; i < 25; i++) {
         const isHard = i >= 20; 
         const botId = `bot_${i}_${Date.now()}`;
@@ -121,7 +124,7 @@ function initBots() {
 initBots();
 
 function updateGame() {
-    // Bullets Core
+    // Projectiles Processing Engine
     for (let i = bullets.length - 1; i >= 0; i--) {
         let b = bullets[i];
         b.x += Math.cos(b.angle) * b.speed;
@@ -145,7 +148,7 @@ function updateGame() {
         }
     }
 
-    // BOT AI MOVEMENT CORE
+    // HARDCORE INTELLIGENT BOT ENGINE
     let now = Date.now();
     for (let id in players) {
         let p = players[id];
@@ -160,9 +163,10 @@ function updateGame() {
             }
         }
 
-        let speed = p.isHard ? 3.0 : 1.6; 
-        let detectionRange = p.isHard ? 500 : 250;
-        let fireCooldown = p.isHard ? 450 : 1400;
+        // BUFFED STATS: Increased move speeds and laser speeds across all tiers
+        let speed = p.isHard ? 4.5 : 2.8; 
+        let detectionRange = p.isHard ? 700 : 400;
+        let fireCooldown = p.isHard ? 250 : 800; // Ultra bots shoot like an absolute machine gun
 
         let targetVisible = false;
         if (closestTarget && minDist < detectionRange) {
@@ -170,24 +174,27 @@ function updateGame() {
         }
 
         if (closestTarget && targetVisible) {
-            // TARGET ACQUIRED MODE
+            // COMBAT PURSUIT SPRINT MODE
             p.angle = Math.atan2(closestTarget.y - p.y, closestTarget.x - p.x);
+            
             let moveX = Math.cos(p.angle) * speed;
             let moveY = Math.sin(p.angle) * speed;
             
-            // Axis separation sliding logic
-            if (!checkWallCollision(p.x + moveX, p.y, 10)) p.x += moveX;
-            if (!checkWallCollision(p.x, p.y + moveY, 10)) p.y += moveY;
+            // Ultra-responsive wall sliding physics configuration
+            if (!checkWallCollision(p.x + moveX, p.y, 8)) p.x += moveX;
+            if (!checkWallCollision(p.x, p.y + moveY, 8)) p.y += moveY;
 
             if (now - p.lastShot > fireCooldown) {
-                bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle, speed: 7.5 });
+                // Predictive Offset: Adds slight accuracy scaling to laser weapon discharges
+                let spread = (Math.random() - 0.5) * (p.isHard ? 0.05 : 0.15);
+                bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle + spread, speed: p.isHard ? 11 : 8.5 });
                 p.lastShot = now;
             }
         } else {
-            // ADVANCED MAP TRAVEL MODE
+            // HIGH-SPEED MAP SEARCH MODE
             let distToWaypoint = Math.hypot(p.targetX - p.x, p.targetY - p.y);
             
-            if (distToWaypoint < 25 || p.stuckTimer > 40) {
+            if (distToWaypoint < 30 || p.stuckTimer > 25) {
                 let nextNode = getGridCenteredSpawn();
                 p.targetX = nextNode.x;
                 p.targetY = nextNode.y;
@@ -201,12 +208,12 @@ function updateGame() {
             let successX = false;
             let successY = false;
 
-            if (!checkWallCollision(p.x + moveX, p.y, 10)) { p.x += moveX; successX = true; }
-            if (!checkWallCollision(p.x, p.y + moveY, 10)) { p.y += moveY; successY = true; }
+            if (!checkWallCollision(p.x + moveX, p.y, 8)) { p.x += moveX; successX = true; }
+            if (!checkWallCollision(p.x, p.y + moveY, 8)) { p.y += moveY; successY = true; }
 
             if (!successX && !successY) {
                 p.stuckTimer++;
-                // If hitting a hard corner block, rotate exactly 90 degrees to immediately exit the corner pocket
+                // Instant reflex pivot: Forces immediate alternate corridor redirection
                 p.angle += (Math.random() > 0.5 ? Math.PI / 2 : -Math.PI / 2);
                 let escapeNode = getGridCenteredSpawn();
                 p.targetX = escapeNode.x;
@@ -231,18 +238,18 @@ io.on('connection', (socket) => {
         p.angle = data.angle;
         let moveX = Math.cos(p.angle) * data.speed;
         let moveY = Math.sin(p.angle) * data.speed;
-        if (!checkWallCollision(p.x + moveX, p.y, 10)) p.x += moveX;
-        if (!checkWallCollision(p.x, p.y + moveY, 10)) p.y += moveY;
+        if (!checkWallCollision(p.x + moveX, p.y, 8)) p.x += moveX;
+        if (!checkWallCollision(p.x, p.y + moveY, 8)) p.y += moveY;
     });
 
     socket.on('shoot', () => {
         let p = players[socket.id];
         if (!p) return;
-        bullets.push({ ownerId: socket.id, x: p.x, y: p.y, angle: p.angle, speed: 8 });
+        bullets.push({ ownerId: socket.id, x: p.x, y: p.y, angle: p.angle, speed: 10 });
     });
 
     socket.on('disconnect', () => { delete players[socket.id]; });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Crash-proof server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Hardcore Arena Engine Online on port ${PORT}`));

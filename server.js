@@ -13,13 +13,14 @@ const io = new Server(server, {
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => { res.sendFile(path.join(__dirname, 'public', 'index.html')); });
 
-const MAZE_SIZE = 15; 
+// EXPANDED MAP LAYOUT: Doubled dimensions from 15x15 to a massive 30x30 matrix
+const MAZE_SIZE = 30; 
 const CELL_SIZE = 100;
 let players = {};
 let bullets = [];
 let maze = [];
 let isResettingMatch = false;
-let matchStartTime = 0; // TRACKS GRACE PERIOD RESET
+let matchStartTime = 0; 
 
 function generateArenaGrid(size) {
     let grid = Array(size).fill(null).map(() => Array(size).fill(null).map(() => ({ n: true, s: true, e: true, w: true })));
@@ -39,10 +40,11 @@ function generateArenaGrid(size) {
     }
     dfs(0, 0);
 
+    // Braid the maze grid paths tightly to maximize open tactical combat choices
     for (let r = 1; r < size - 1; r++) {
-        for (let c = 1; r < size - 1 && c < size - 1; c++) {
-            if (Math.random() < 0.5) { grid[r][c].n = false; grid[r-1][c].s = false; }
-            if (Math.random() < 0.5) { grid[r][c].w = false; grid[r][c-1].e = false; }
+        for (let c = 1; c < size - 1; c++) {
+            if (Math.random() < 0.55) { grid[r][c].n = false; grid[r-1][c].s = false; }
+            if (Math.random() < 0.55) { grid[r][c].w = false; grid[r][c-1].e = false; }
         }
     }
     return grid;
@@ -75,8 +77,8 @@ function isWallBlocking(x, y) {
 
 function hasLineOfSight(x0, y0, x1, y1) {
     let dist = Math.hypot(x1 - x0, y1 - y0);
-    if (dist > 500) return false; 
-    let steps = Math.min(10, Math.ceil(dist / 40)); 
+    if (dist > 650) return false; 
+    let steps = Math.min(12, Math.ceil(dist / 40)); 
     for (let i = 1; i < steps; i++) {
         let t = i / steps;
         if (isWallBlocking(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)) return false;
@@ -86,7 +88,7 @@ function hasLineOfSight(x0, y0, x1, y1) {
 
 function startNewMatchRound() {
     isResettingMatch = false;
-    matchStartTime = Date.now(); // Start 3-second grace window clock
+    matchStartTime = Date.now(); 
     bullets = [];
     maze = generateArenaGrid(MAZE_SIZE);
 
@@ -101,7 +103,7 @@ function startNewMatchRound() {
     }
     players = currentHumans;
 
-    // Hard-load 20 Normal Bots
+    // Hard-load exactly 20 Normal Bots across expanded vectors
     for (let i = 0; i < 20; i++) {
         let botId = `bot_normal_${i}`;
         let spawn = getRandomCellCenter();
@@ -112,7 +114,7 @@ function startNewMatchRound() {
         };
     }
 
-    // Hard-load 5 Extreme Bots
+    // Hard-load exactly 5 Extreme Bots across expanded vectors
     for (let i = 0; i < 5; i++) {
         let botId = `bot_extreme_${i}`;
         let spawn = getRandomCellCenter();
@@ -130,9 +132,10 @@ startNewMatchRound();
 
 function updateGame() {
     let now = Date.now();
-    let isGracePeriodActive = (now - matchStartTime) < 3000; // 3-second immunity
+    // 5-SECOND IMMUNITY GRACE WINDOW CORE FEATURE
+    let isGracePeriodActive = (now - matchStartTime) < 5000; 
 
-    // Projectiles
+    // Projectile engine math
     for (let i = bullets.length - 1; i >= 0; i--) {
         let b = bullets[i];
         b.x += b.vx; b.y += b.vy;
@@ -142,9 +145,12 @@ function updateGame() {
         for (let pId in players) {
             let p = players[pId];
             if (pId !== b.ownerId && Math.abs(p.x - b.x) < 18 && Math.abs(p.y - b.y) < 18) {
-                p.health -= 1;
+                // If within the first 5 seconds, bullet impacts dissolve cleanly into 0 total damage
+                if (!isGracePeriodActive) {
+                    p.health -= 1;
+                    if (p.health <= 0) delete players[pId];
+                }
                 bullets.splice(i, 1);
-                if (p.health <= 0) delete players[pId];
                 break;
             }
         }
@@ -152,7 +158,6 @@ function updateGame() {
 
     let totalAlive = Object.keys(players).length;
 
-    // ONLY check win condition if grace period is OVER to let everyone load
     if (!isGracePeriodActive && totalAlive <= 1 && !isResettingMatch) {
         isResettingMatch = true;
         let lastSurvivorName = totalAlive === 1 ? Object.values(players)[0].name : "NONE";
@@ -167,7 +172,7 @@ function updateGame() {
 
         let speed = p.isHard ? 4.0 : 2.2;
         let fireCooldown = p.isHard ? 200 : 850;
-        let detectionRange = p.isHard ? 600 : 350;
+        let detectionRange = p.isHard ? 650 : 380;
 
         let visibleTarget = null; 
         let minDist = detectionRange;
@@ -195,8 +200,8 @@ function updateGame() {
                 p.currentDir = dy > 0 ? 's' : 'n';
             }
 
-            // BOTS CANONLY SHOOT IF GRACE PERIOD IS OVER
-            if (!isGracePeriodActive && (now - p.lastShot > fireCooldown)) {
+            // Bots can safely fire tracers to give a visual warm-up display, but they deal zero damage
+            if (now - p.lastShot > fireCooldown) {
                 bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle, vx: Math.cos(p.angle)*12, vy: Math.sin(p.angle)*12 });
                 p.lastShot = now;
             }
@@ -226,7 +231,9 @@ function updateGame() {
         if (vx !== 0 || vy !== 0) p.angle = Math.atan2(vy, vx);
     }
 
-    io.emit('gameState', { players, bullets });
+    // Pass countdown metrics out to clients
+    let secondsLeft = Math.max(0, Math.ceil((5000 - (now - matchStartTime)) / 1000));
+    io.emit('gameState', { players, bullets, warmUpSecs: secondsLeft });
 }
 
 setInterval(updateGame, 1000 / 30);
@@ -246,10 +253,7 @@ io.on('connection', (socket) => {
 
     socket.on('shoot', () => {
         let p = players[socket.id]; if (!p) return;
-        // HUMANS CAN ONLY SHOOT IF GRACE PERIOD IS OVER
-        if ((Date.now() - matchStartTime) >= 3000) {
-            bullets.push({ ownerId: socket.id, x: p.x, y: p.y, angle: p.angle, vx: Math.cos(p.angle)*12, vy: Math.sin(p.angle)*12 });
-        }
+        bullets.push({ ownerId: socket.id, x: p.x, y: p.y, angle: p.angle, vx: Math.cos(p.angle)*12, vy: Math.sin(p.angle)*12 });
     });
 
     socket.on('disconnect', () => { delete players[socket.id]; });

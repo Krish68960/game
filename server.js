@@ -36,7 +36,6 @@ function generateArenaGrid(size) {
     }
     dfs(0, 0);
 
-    // Open up 50% of the walls to turn it into a high-speed combat arena loop layout
     for (let r = 1; r < size - 1; r++) {
         for (let c = 1; c < size - 1; c++) {
             if (Math.random() < 0.5) { grid[r][c].n = false; grid[r-1][c].s = false; }
@@ -52,13 +51,6 @@ function getRandomName(prefix = "") {
     return `${prefix}${namesList[Math.floor(Math.random() * namesList.length)]}#${Math.floor(1000 + Math.random() * 9000)}`;
 }
 
-function getRandomCellCenter() {
-    let r = Math.floor(Math.random() * MAZE_SIZE);
-    let c = Math.floor(Math.random() * MAZE_SIZE);
-    return { x: c * CELL_SIZE + 50, y: r * CELL_SIZE + 50 };
-}
-
-// Master Wall Rule Engine
 function isWallBlocking(x, y) {
     let c = Math.floor(x / CELL_SIZE);
     let r = Math.floor(y / CELL_SIZE);
@@ -86,37 +78,47 @@ function hasLineOfSight(x0, y0, x1, y1) {
     return true;
 }
 
-// FIXED: Deterministic pool loop forces all 25 bots to load into memory
+// FIXED: Hardcoded absolute array generation pattern guarantees exactly 25 bots run in concurrent slots
 function initBots() {
     players = {}; 
     
-    // 20 Normal Bots
+    // Create a list of distinct map cells to make sure bots do not overlap on start
+    let spawnPoints = [];
+    for (let r = 0; r < MAZE_SIZE; r++) {
+        for (let c = 0; c < MAZE_SIZE; c++) {
+            spawnPoints.push({ x: c * CELL_SIZE + 50, y: r * CELL_SIZE + 50 });
+        }
+    }
+    // Shuffle the locations
+    spawnPoints.sort(() => Math.random() - 0.5);
+
+    // Strictly generate 20 Normal Bots
     for (let i = 0; i < 20; i++) {
-        let id = `bot_normal_${i}`; 
-        let spawn = getRandomCellCenter();
+        let id = `bot_normal_${i}_${Date.now()}`; 
+        let spawn = spawnPoints[i];
         players[id] = { 
             id, name: getRandomName(""), 
             x: spawn.x, y: spawn.y, angle: 0, health: 5, 
             isBot: true, isHard: false, lastShot: 0, 
-            currentDir: 'e' // Always start with a default directional heading
+            currentDir: ['n', 's', 'e', 'w'][Math.floor(Math.random() * 4)]
         };
     }
-    // 5 Extreme Bots
+
+    // Strictly generate 5 Extreme Bots
     for (let i = 0; i < 5; i++) {
-        let id = `bot_extreme_${i}`; 
-        let spawn = getRandomCellCenter();
+        let id = `bot_extreme_${i}_${Date.now()}`; 
+        let spawn = spawnPoints[20 + i]; // Grab from different un-allocated points
         players[id] = { 
             id, name: getRandomName("EXTREME_"), 
             x: spawn.x, y: spawn.y, angle: 0, health: 5, 
             isBot: true, isHard: true, lastShot: 0, 
-            currentDir: 'w'
+            currentDir: ['n', 's', 'e', 'w'][Math.floor(Math.random() * 4)]
         };
     }
 }
 initBots();
 
 function updateGame() {
-    // Projectile Engine updates
     for (let i = bullets.length - 1; i >= 0; i--) {
         let b = bullets[i];
         b.x += b.vx; b.y += b.vy;
@@ -128,7 +130,28 @@ function updateGame() {
             if (pId !== b.ownerId && Math.abs(p.x - b.x) < 18 && Math.abs(p.y - b.y) < 18) {
                 p.health -= 1;
                 bullets.splice(i, 1);
-                if (p.health <= 0) delete players[pId];
+                
+                if (p.health <= 0) {
+                    let pIdIsBot = p.isBot;
+                    let pIdIsHard = p.isHard;
+                    delete players[pId];
+
+                    // FIXED: Immediate Respawn Routine. If a bot dies, a replacement fires up right away to hold count at 25.
+                    if (pIdIsBot) {
+                        let r = Math.floor(Math.random() * MAZE_SIZE);
+                        let c = Math.floor(Math.random() * MAZE_SIZE);
+                        let spawnX = c * CELL_SIZE + 50;
+                        let spawnY = r * CELL_SIZE + 50;
+                        let newId = `bot_respawn_${Date.now()}_${Math.random()}`;
+                        players[newId] = {
+                            id: newId,
+                            name: getRandomName(pIdIsHard ? "EXTREME_" : ""),
+                            x: spawnX, y: spawnY, angle: 0, health: 5,
+                            isBot: true, isHard: pIdIsHard, lastShot: 0,
+                            currentDir: ['n', 's', 'e', 'w'][Math.floor(Math.random() * 4)]
+                        };
+                    }
+                }
                 break;
             }
         }
@@ -136,7 +159,6 @@ function updateGame() {
 
     let now = Date.now();
     
-    // UNBREAKABLE STEERING ENGINE LOOP
     for (let id in players) {
         let p = players[id];
         if (!p.isBot) continue;
@@ -145,7 +167,6 @@ function updateGame() {
         let fireCooldown = p.isHard ? 200 : 850;
         let detectionRange = p.isHard ? 600 : 350;
 
-        // 1. Scan for closest enemy with clear LOS
         let visibleTarget = null; 
         let minDist = detectionRange;
 
@@ -159,14 +180,10 @@ function updateGame() {
             }
         }
 
-        // 2. Movement Logic (Arcade directional vector handling)
         let vx = 0, vy = 0;
 
         if (visibleTarget) {
-            // COMBAT PURSUIT: Move directly towards open axes of visible enemy
             p.angle = Math.atan2(visibleTarget.y - p.y, visibleTarget.x - p.x);
-            
-            // Convert angle to dominant open cardial direction
             let dx = visibleTarget.x - p.x;
             let dy = visibleTarget.y - p.y;
             
@@ -182,13 +199,11 @@ function updateGame() {
             }
         }
 
-        // Apply velocities based on current cardial direction
         if (p.currentDir === 'n') vy = -speed;
         if (p.currentDir === 's') vy = speed;
         if (p.currentDir === 'w') vx = -speed;
         if (p.currentDir === 'e') vx = speed;
 
-        // 3. CRITICAL: If path is blocked, auto-calculate alternate direction immediately
         if (isWallBlocking(p.x + vx, p.y + vy)) {
             let directions = ['n', 's', 'e', 'w'].sort(() => Math.random() - 0.5);
             for (let dir of directions) {
@@ -207,10 +222,8 @@ function updateGame() {
             }
         }
 
-        // Apply final safe verified movement steps
         p.x += vx;
         p.y += vy;
-
         if (vx !== 0 || vy !== 0) p.angle = Math.atan2(vy, vx);
     }
 
@@ -220,8 +233,9 @@ function updateGame() {
 setInterval(updateGame, 1000 / 30);
 
 io.on('connection', (socket) => {
-    let spawn = getRandomCellCenter();
-    players[socket.id] = { id: socket.id, name: getRandomName(""), x: spawn.x, y: spawn.y, angle: 0, health: 5, isBot: false };
+    let r = Math.floor(Math.random() * MAZE_SIZE);
+    let c = Math.floor(Math.random() * MAZE_SIZE);
+    players[socket.id] = { id: socket.id, name: getRandomName(""), x: c * CELL_SIZE + 50, y: r * CELL_SIZE + 50, angle: 0, health: 5, isBot: false };
     socket.emit('init', { maze, size: MAZE_SIZE, cellSize: CELL_SIZE, id: socket.id });
 
     socket.on('move', (data) => {

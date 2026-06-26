@@ -13,14 +13,12 @@ const io = new Server(server, {
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => { res.sendFile(path.join(__dirname, 'public', 'index.html')); });
 
-// EXPANDED MAP LAYOUT: Doubled dimensions from 15x15 to a massive 30x30 matrix
 const MAZE_SIZE = 30; 
 const CELL_SIZE = 100;
 let players = {};
 let bullets = [];
 let maze = [];
 let isResettingMatch = false;
-let matchStartTime = 0; 
 
 function generateArenaGrid(size) {
     let grid = Array(size).fill(null).map(() => Array(size).fill(null).map(() => ({ n: true, s: true, e: true, w: true })));
@@ -40,7 +38,6 @@ function generateArenaGrid(size) {
     }
     dfs(0, 0);
 
-    // Braid the maze grid paths tightly to maximize open tactical combat choices
     for (let r = 1; r < size - 1; r++) {
         for (let c = 1; c < size - 1; c++) {
             if (Math.random() < 0.55) { grid[r][c].n = false; grid[r-1][c].s = false; }
@@ -88,42 +85,47 @@ function hasLineOfSight(x0, y0, x1, y1) {
 
 function startNewMatchRound() {
     isResettingMatch = false;
-    matchStartTime = Date.now(); 
     bullets = [];
     maze = generateArenaGrid(MAZE_SIZE);
 
+    // Filter humans safely and assign personal shields
     let currentHumans = {};
     for (let id in players) {
         if (players[id] && !players[id].isBot) {
             let spawn = getRandomCellCenter();
             currentHumans[id] = {
-                id: id, name: players[id].name, x: spawn.x, y: spawn.y, angle: 0, health: 5, isBot: false
+                id: id, name: players[id].name, x: spawn.x, y: spawn.y, angle: 0, health: 5, isBot: false,
+                spawnTime: Date.now() // Track their personal warm-up window
             };
         }
     }
     players = currentHumans;
 
-    // Hard-load exactly 20 Normal Bots across expanded vectors
-    for (let i = 0; i < 20; i++) {
-        let botId = `bot_normal_${i}`;
-        let spawn = getRandomCellCenter();
-        players[botId] = {
-            id: botId, name: getRandomName(""), x: spawn.x, y: spawn.y, angle: 0, health: 5,
-            isBot: true, isHard: false, lastShot: 0,
-            currentDir: ['n', 's', 'e', 'w'][Math.floor(Math.random() * 4)]
-        };
-    }
+    // FIX 2: Staggered bot spawning to prevent network drops
+    let totalBotsToSpawn = 25;
+    let currentlySpawned = 0;
 
-    // Hard-load exactly 5 Extreme Bots across expanded vectors
-    for (let i = 0; i < 5; i++) {
-        let botId = `bot_extreme_${i}`;
+    let spawnInterval = setInterval(() => {
+        if (currentlySpawned >= totalBotsToSpawn || isResettingMatch) {
+            clearInterval(spawnInterval);
+            return;
+        }
+
+        const isHard = currentlySpawned >= 20;
+        const botId = isHard ? `bot_extreme_${currentlySpawned}_${Date.now()}` : `bot_normal_${currentlySpawned}_${Date.now()}`;
         let spawn = getRandomCellCenter();
+
         players[botId] = {
-            id: botId, name: getRandomName("EXTREME_"), x: spawn.x, y: spawn.y, angle: 0, health: 5,
-            isBot: true, isHard: true, lastShot: 0,
+            id: botId,
+            name: getRandomName(isHard ? "EXTREME_" : ""),
+            x: spawn.x, y: spawn.y, angle: 0, health: 5,
+            isBot: true, isHard: isHard, lastShot: 0,
+            spawnTime: Date.now(), // Track their personal warm-up window
             currentDir: ['n', 's', 'e', 'w'][Math.floor(Math.random() * 4)]
         };
-    }
+
+        currentlySpawned++;
+    }, 100); // Spawns 1 bot every 100ms smoothly
 
     io.emit('newRound', { maze, size: MAZE_SIZE, cellSize: CELL_SIZE });
 }
@@ -132,10 +134,8 @@ startNewMatchRound();
 
 function updateGame() {
     let now = Date.now();
-    // 5-SECOND IMMUNITY GRACE WINDOW CORE FEATURE
-    let isGracePeriodActive = (now - matchStartTime) < 5000; 
 
-    // Projectile engine math
+    // Projectiles Processing
     for (let i = bullets.length - 1; i >= 0; i--) {
         let b = bullets[i];
         b.x += b.vx; b.y += b.vy;
@@ -145,8 +145,10 @@ function updateGame() {
         for (let pId in players) {
             let p = players[pId];
             if (pId !== b.ownerId && Math.abs(p.x - b.x) < 18 && Math.abs(p.y - b.y) < 18) {
-                // If within the first 5 seconds, bullet impacts dissolve cleanly into 0 total damage
-                if (!isGracePeriodActive) {
+                // Personal warm-up check: Protects entities for 5 seconds after they spawn
+                let pGraceActive = (now - p.spawnTime) < 5000;
+                
+                if (!pGraceActive) {
                     p.health -= 1;
                     if (p.health <= 0) delete players[pId];
                 }
@@ -158,7 +160,8 @@ function updateGame() {
 
     let totalAlive = Object.keys(players).length;
 
-    if (!isGracePeriodActive && totalAlive <= 1 && !isResettingMatch) {
+    // End match checking logic
+    if (totalAlive <= 1 && !isResettingMatch) {
         isResettingMatch = true;
         let lastSurvivorName = totalAlive === 1 ? Object.values(players)[0].name : "NONE";
         io.emit('roundEndingAnnounce', { winner: lastSurvivorName });
@@ -200,7 +203,6 @@ function updateGame() {
                 p.currentDir = dy > 0 ? 's' : 'n';
             }
 
-            // Bots can safely fire tracers to give a visual warm-up display, but they deal zero damage
             if (now - p.lastShot > fireCooldown) {
                 bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle, vx: Math.cos(p.angle)*12, vy: Math.sin(p.angle)*12 });
                 p.lastShot = now;
@@ -231,16 +233,14 @@ function updateGame() {
         if (vx !== 0 || vy !== 0) p.angle = Math.atan2(vy, vx);
     }
 
-    // Pass countdown metrics out to clients
-    let secondsLeft = Math.max(0, Math.ceil((5000 - (now - matchStartTime)) / 1000));
-    io.emit('gameState', { players, bullets, warmUpSecs: secondsLeft });
+    io.emit('gameState', { players, bullets });
 }
 
 setInterval(updateGame, 1000 / 30);
 
 io.on('connection', (socket) => {
     let spawn = getRandomCellCenter();
-    players[socket.id] = { id: socket.id, name: getRandomName(""), x: spawn.x, y: spawn.y, angle: 0, health: 5, isBot: false };
+    players[socket.id] = { id: socket.id, name: getRandomName(""), x: spawn.x, y: spawn.y, angle: 0, health: 5, isBot: false, spawnTime: Date.now() };
     socket.emit('init', { maze, size: MAZE_SIZE, cellSize: CELL_SIZE, id: socket.id });
 
     socket.on('move', (data) => {

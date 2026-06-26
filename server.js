@@ -86,11 +86,11 @@ function initBots() {
     players = {}; 
     for (let i = 0; i < 20; i++) {
         let id = `b_n_${i}`; let spawn = getRandomCellCenter();
-        players[id] = { id, name: getRandomName(""), x: spawn.x, y: spawn.y, angle: Math.random()*6, health: 5, isBot: true, isHard: false, lastShot: 0, vx: 2, vy: 0, wallStuckFrames: 0 };
+        players[id] = { id, name: getRandomName(""), x: spawn.x, y: spawn.y, angle: Math.random()*6, health: 5, isBot: true, isHard: false, lastShot: 0, vx: 2, vy: 0 };
     }
     for (let i = 0; i < 5; i++) {
         let id = `b_e_${i}`; let spawn = getRandomCellCenter();
-        players[id] = { id, name: getRandomName("EXTREME_"), x: spawn.x, y: spawn.y, angle: Math.random()*6, health: 5, isBot: true, isHard: true, lastShot: 0, vx: 4, vy: 0, wallStuckFrames: 0 };
+        players[id] = { id, name: getRandomName("EXTREME_"), x: spawn.x, y: spawn.y, angle: Math.random()*6, health: 5, isBot: true, isHard: true, lastShot: 0, vx: 4, vy: 0 };
     }
 }
 initBots();
@@ -119,35 +119,30 @@ function updateGame() {
         let p = players[id];
         if (!p.isBot) continue;
 
-        // 1. 360 DEGREE RADAR SCAN: Scans in all directions for the closest enemy player/bot
-        let closestTarget = null; 
-        let minDist = 9999;
+        let speed = p.isHard ? 4.2 : 2.4;
+        let fireCooldown = p.isHard ? 200 : 850;
+        let detectionRange = p.isHard ? 650 : 400;
+
+        // FIXED: First, scan for an enemy that is in range AND has a completely clear vision profile
+        let visibleTarget = null; 
+        let minDist = detectionRange;
+
         for (let tId in players) {
             if (tId !== id) {
                 let d = Math.hypot(players[tId].x - p.x, players[tId].y - p.y);
-                if (d < minDist) { minDist = d; closestTarget = players[tId]; }
+                if (d < minDist) {
+                    // Check vision BEFORE allowing tracking mechanics
+                    if (hasLineOfSight(p.x, p.y, players[tId].x, players[tId].y)) {
+                        minDist = d;
+                        visibleTarget = players[tId];
+                    }
+                }
             }
         }
 
-        let speed = p.isHard ? 4.2 : 2.4;
-        let fireCooldown = p.isHard ? 220 : 850;
-        let detectionRange = p.isHard ? 650 : 400;
-
-        let canSeeTarget = closestTarget && minDist < detectionRange && hasLineOfSight(p.x, p.y, closestTarget.x, closestTarget.y);
-
-        // 2. STUCK DETECTION AND WALL STANDOFF BREAKOUT COUNTER
-        if (p.wallStuckFrames > 45) {
-            // Force the bot to stop hunting and pick a hard alternative angle to run away around the wall corner
-            let escapeAngle = p.angle + (Math.random() > 0.5 ? Math.PI / 2 : -Math.PI / 2);
-            p.vx = Math.cos(escapeAngle) * speed;
-            p.vy = Math.sin(escapeAngle) * speed;
-            if (Math.random() < 0.05) p.wallStuckFrames = 0; // Reset after breakout escape maneuver complete
-            canSeeTarget = false; // Temporarily mask line of sight to prioritize movement over wall pointing
-        }
-
-        if (canSeeTarget) {
-            // COMBAT RADAR FOLLOW AND SHOOT LOGIC
-            p.angle = Math.atan2(closestTarget.y - p.y, closestTarget.x - p.x);
+        if (visibleTarget) {
+            // COMBAT STATE: Fires up ONLY when a clean, uninterrupted path to target is verified
+            p.angle = Math.atan2(visibleTarget.y - p.y, visibleTarget.x - p.x);
             p.vx = Math.cos(p.angle) * speed; 
             p.vy = Math.sin(p.angle) * speed;
 
@@ -155,8 +150,8 @@ function updateGame() {
                 bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle, vx: Math.cos(p.angle)*12, vy: Math.sin(p.angle)*12, speed: 12 });
                 p.lastShot = now;
             }
-        } else if (p.wallStuckFrames <= 45) {
-            // REGULAR ROAMING MAP RADAR PATROL
+        } else {
+            // EXPLORATION PATROL STATE: Continues wandering smoothly through hallways if vision is blocked
             if ((Math.abs(p.vx) < 0.1 && Math.abs(p.vy) < 0.1) || Math.random() < 0.02) {
                 let rAngle = Math.floor(Math.random() * 4) * (Math.PI / 2);
                 p.vx = Math.cos(rAngle) * speed; 
@@ -164,19 +159,9 @@ function updateGame() {
             }
         }
 
-        // 3. DETERMINISTIC BOUNDS MOVEMENT + LOCK PROTECTION
-        let oldX = p.x;
-        let oldY = p.y;
-
+        // Apply robust axis thresholds sliding
         if (!isWallBlocking(p.x + p.vx, p.y)) p.x += p.vx; else p.vx = -p.vx;
         if (!isWallBlocking(p.x, p.y + p.vy)) p.y += p.vy; else p.vy = -p.vy;
-        
-        // Check if position didn't actually change (stuck against wall blocking threshold)
-        if (Math.abs(p.x - oldX) < 0.1 && Math.abs(p.y - oldY) < 0.1 && (p.vx !== 0 || p.vy !== 0)) {
-            p.wallStuckFrames++;
-        } else {
-            if (p.wallStuckFrames > 0) p.wallStuckFrames--;
-        }
 
         if (p.vx !== 0 || p.vy !== 0) p.angle = Math.atan2(p.vy, p.vx);
     }

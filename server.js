@@ -83,71 +83,61 @@ function hasLineOfSight(x0, y0, x1, y1) {
     return true;
 }
 
-// Global Match Controller System
+// FIXED: Clean isolation engine completely guarantees all 25 load channels stay open
 function startNewMatchRound() {
     isResettingMatch = false;
     bullets = [];
-    
-    // Generate a fresh randomized arena layout
     maze = generateArenaGrid(MAZE_SIZE);
 
-    let spawnPoints = [];
-    for (let r = 0; r < MAZE_SIZE; r++) {
-        for (let c = 0; c < MAZE_SIZE; c++) {
-            spawnPoints.push({ x: c * CELL_SIZE + 50, y: r * CELL_SIZE + 50 });
+    // Filter and save real humans safely FIRST
+    let currentHumans = {};
+    for (let id in players) {
+        if (players[id] && !players[id].isBot) {
+            let spawn = getRandomCellCenter();
+            currentHumans[id] = {
+                id: id,
+                name: players[id].name,
+                x: spawn.x, y: spawn.y, angle: 0, health: 5,
+                isBot: false
+            };
         }
     }
-    spawnPoints.sort(() => Math.random() - 0.5);
-
-    // Filter current connected active real humans, wipe the old dead bots cleanly
-    let humanIds = Object.keys(players).filter(id => !players[id].isBot);
-    let savedHumans = {};
     
-    humanIds.forEach((id, idx) => {
-        let pSpawn = spawnPoints[idx] || getRandomCellCenter();
-        savedHumans[id] = {
-            id: id,
-            name: players[id].name,
-            x: pSpawn.x, y: pSpawn.y, angle: 0, health: 5,
-            isBot: false
-        };
-    });
-    
-    players = savedHumans; // Retain players safely
+    // Hard reset the master object list to only contain our active humans
+    players = currentHumans;
 
-    // Deploy 20 Normal Bots
+    // Hard-forced independent loops that DO NOT share indices or arrays
     for (let i = 0; i < 20; i++) {
-        let id = `bot_normal_${i}`; 
-        let spawn = spawnPoints[humanIds.length + i] || getRandomCellCenter();
-        players[id] = { 
-            id, name: getRandomName(""), 
-            x: spawn.x, y: spawn.y, angle: 0, health: 5, 
-            isBot: true, isHard: false, lastShot: 0, 
+        let botId = `bot_normal_${i}_${Date.now()}`;
+        let spawn = getRandomCellCenter();
+        players[botId] = {
+            id: botId,
+            name: getRandomName(""),
+            x: spawn.x, y: spawn.y, angle: 0, health: 5,
+            isBot: true, isHard: false, lastShot: 0,
             currentDir: ['n', 's', 'e', 'w'][Math.floor(Math.random() * 4)]
         };
     }
 
-    // Deploy 5 Extreme Bots
     for (let i = 0; i < 5; i++) {
-        let id = `bot_extreme_${i}`; 
-        let spawn = spawnPoints[humanIds.length + 20 + i] || getRandomCellCenter();
-        players[id] = { 
-            id, name: getRandomName("EXTREME_"), 
-            x: spawn.x, y: spawn.y, angle: 0, health: 5, 
-            isBot: true, isHard: true, lastShot: 0, 
+        let botId = `bot_extreme_${i}_${Date.now()}`;
+        let spawn = getRandomCellCenter();
+        players[botId] = {
+            id: botId,
+            name: getRandomName("EXTREME_"),
+            x: spawn.x, y: spawn.y, angle: 0, health: 5,
+            isBot: true, isHard: true, lastShot: 0,
             currentDir: ['n', 's', 'e', 'w'][Math.floor(Math.random() * 4)]
         };
     }
 
-    // Broadcast setup data matrix globally to all browser handlers
     io.emit('newRound', { maze, size: MAZE_SIZE, cellSize: CELL_SIZE });
 }
 
-// Initial Boot up kickoff trigger
+// Kickstart match immediately
 startNewMatchRound();
 
 function updateGame() {
-    // Projectiles Verification Core
     for (let i = bullets.length - 1; i >= 0; i--) {
         let b = bullets[i];
         b.x += b.vx; b.y += b.vy;
@@ -159,7 +149,7 @@ function updateGame() {
             if (pId !== b.ownerId && Math.abs(p.x - b.x) < 18 && Math.abs(p.y - b.y) < 18) {
                 p.health -= 1;
                 bullets.splice(i, 1);
-                if (p.health <= 0) delete players[pId]; // REMOVED INSTANT RESPAWN: Bots stay completely dead!
+                if (p.health <= 0) delete players[pId];
                 break;
             }
         }
@@ -168,22 +158,17 @@ function updateGame() {
     let now = Date.now();
     let totalAlive = Object.keys(players).length;
 
-    // CHECK WINNER CONDITIONS: If 1 or 0 agents survive, queue a clean lobby round reset map swap
     if (totalAlive <= 1 && !isResettingMatch) {
         isResettingMatch = true;
         let lastSurvivorName = totalAlive === 1 ? Object.values(players)[0].name : "NONE";
         io.emit('roundEndingAnnounce', { winner: lastSurvivorName });
-        
-        // 5 second delay to let stream viewers enjoy the win screen before rebuilding the maze
-        setTimeout(() => {
-            startNewMatchRound();
-        }, 5000);
+        setTimeout(() => { startNewMatchRound(); }, 5000);
         return;
     }
 
     for (let id in players) {
         let p = players[id];
-        if (!p.isBot) continue;
+        if (!p || !p.isBot) continue;
 
         let speed = p.isHard ? 4.0 : 2.2;
         let fireCooldown = p.isHard ? 200 : 850;

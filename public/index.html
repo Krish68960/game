@@ -7,10 +7,7 @@
     <script src="/socket.io/socket.io.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
     <style>
-        /* Block touch gesture events and browser stretching routines */
-        html, body {
-            position: fixed; width: 100%; height: 100%; overflow: hidden; touch-action: none; margin: 0; background: #05070a;
-        }
+        html, body { position: fixed; width: 100%; height: 100%; overflow: hidden; touch-action: none; margin: 0; background: #05070a; }
         body { color: #fff; font-family: 'Rajdhani', sans-serif; user-select: none; -webkit-user-select: none; }
         canvas { display: block; touch-action: none; }
         
@@ -22,7 +19,6 @@
         #playerName { font-family: 'Orbitron', sans-serif; font-size: 15px; letter-spacing: 1px; }
         #playerHealth { font-size: 18px; color: #ff0055; margin: 4px 0; font-weight: bold; }
         .alive-count { font-size: 13px; color: #00d2ff; }
-        #warmup-alert { font-size: 14px; color: #ffd32a; font-weight: bold; letter-spacing: 1px; margin-top: 3px; display: none; }
 
         #controls-container {
             position: absolute; bottom: 30px; left: 0; width: 100%;
@@ -57,10 +53,9 @@
 <body>
 
 <div id="hud">
-    <div id="playerName">SYNCING INTEL...</div>
-    <div id="playerHealth">HP: 5 / 5</div>
-    <div class="alive-count" id="aliveCounter">SURVIVORS: 0</div>
-    <div id="warmup-alert">WARMUP IMMUNITY ACTIVED: 5s</div>
+    <div id="playerName">CONNECTING...</div>
+    <div id="playerHealth">HP: --</div>
+    <div class="alive-count" id="aliveCounter">SURVIVORS: --</div>
 </div>
 
 <div id="announcement-screen">
@@ -87,7 +82,6 @@
     const announceScreen = document.getElementById('announcement-screen');
     const announceTitle = document.getElementById('announce-title');
     const announceDesc = document.getElementById('announce-desc');
-    const warmupAlert = document.getElementById('warmup-alert');
     
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
@@ -102,7 +96,6 @@
     window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
     window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
 
-    // Hard block browser pitch zoom short cuts on keyboards
     window.addEventListener('wheel', e => { if (e.ctrlKey) e.preventDefault(); }, { passive: false });
     document.addEventListener('gesturestart', e => e.preventDefault());
 
@@ -161,25 +154,20 @@
         
         let me = serverState.players[myId];
         
-        // Handle warmup overlay details
-        if (serverState.warmUpSecs && serverState.warmUpSecs > 0) {
-            warmupAlert.style.display = 'block';
-            warmupAlert.innerText = `SAFETY MATRIX ACTIVE: ${serverState.warmUpSecs}s`;
-        } else {
-            warmupAlert.style.display = 'none';
-        }
-
         if (!me) {
             document.getElementById('playerName').innerText = "SPECTATOR MODE";
-            document.getElementById('playerHealth').innerText = "STATUS: DOWN";
+            document.getElementById('playerHealth').innerText = "STATUS: ELIMINATED";
             document.getElementById('aliveCounter').innerText = `COMBATANTS ACTIVE: ${Object.keys(serverState.players).length}`;
             
-            let randomLivePlayer = Object.values(serverState.players)[0];
-            if (randomLivePlayer) {
-                if (!localPlayers['spectator']) localPlayers['spectator'] = { x: randomLivePlayer.x, y: randomLivePlayer.y };
-                localPlayers['spectator'].x += (randomLivePlayer.x - localPlayers['spectator'].x) * 0.2;
-                localPlayers['spectator'].y += (randomLivePlayer.y - localPlayers['spectator'].y) * 0.2;
+            // Camera lock on fallback target
+            let fallbackTarget = Object.values(serverState.players)[0];
+            if (fallbackTarget) {
+                if (!localPlayers['spectator']) localPlayers['spectator'] = { x: fallbackTarget.x, y: fallbackTarget.y };
+                localPlayers['spectator'].x += (fallbackTarget.x - localPlayers['spectator'].x) * 0.15;
+                localPlayers['spectator'].y += (fallbackTarget.y - localPlayers['spectator'].y) * 0.15;
                 drawScene(localPlayers['spectator'].x, localPlayers['spectator'].y);
+            } else {
+                drawScene(1500, 1500); // Arena center fallback point coordinates
             }
         } else {
             document.getElementById('playerName').innerText = "OPERATIVE: " + me.name;
@@ -197,8 +185,8 @@
             }
 
             if (!localPlayers[myId]) localPlayers[myId] = { x: me.x, y: me.y, angle: me.angle };
-            localPlayers[myId].x += (me.x - localPlayers[myId].x) * 0.35;
-            localPlayers[myId].y += (me.y - localPlayers[myId].y) * 0.35;
+            localPlayers[myId].x += (me.x - localPlayers[myId].x) * 0.25;
+            localPlayers[myId].y += (me.y - localPlayers[myId].y) * 0.25;
 
             drawScene(localPlayers[myId].x, localPlayers[myId].y);
         }

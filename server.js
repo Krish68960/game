@@ -36,6 +36,7 @@ function generateArenaGrid(size) {
     }
     dfs(0, 0);
 
+    // Open up 50% of the walls to turn it into a high-speed combat arena loop layout
     for (let r = 1; r < size - 1; r++) {
         for (let c = 1; c < size - 1; c++) {
             if (Math.random() < 0.5) { grid[r][c].n = false; grid[r-1][c].s = false; }
@@ -52,9 +53,12 @@ function getRandomName(prefix = "") {
 }
 
 function getRandomCellCenter() {
-    return { x: Math.floor(Math.random() * MAZE_SIZE) * CELL_SIZE + 50, y: Math.floor(Math.random() * MAZE_SIZE) * CELL_SIZE + 50 };
+    let r = Math.floor(Math.random() * MAZE_SIZE);
+    let c = Math.floor(Math.random() * MAZE_SIZE);
+    return { x: c * CELL_SIZE + 50, y: r * CELL_SIZE + 50 };
 }
 
+// Master Wall Rule Engine
 function isWallBlocking(x, y) {
     let c = Math.floor(x / CELL_SIZE);
     let r = Math.floor(y / CELL_SIZE);
@@ -64,10 +68,10 @@ function isWallBlocking(x, y) {
     let ox = x % CELL_SIZE;
     let oy = y % CELL_SIZE;
 
-    if (cell.e && ox > 92) return true;
-    if (cell.w && ox < 8) return true;
-    if (cell.s && oy > 92) return true;
-    if (cell.n && oy < 8) return true;
+    if (cell.e && ox > 85) return true;
+    if (cell.w && ox < 15) return true;
+    if (cell.s && oy > 85) return true;
+    if (cell.n && oy < 15) return true;
     return false;
 }
 
@@ -82,20 +86,37 @@ function hasLineOfSight(x0, y0, x1, y1) {
     return true;
 }
 
+// FIXED: Deterministic pool loop forces all 25 bots to load into memory
 function initBots() {
     players = {}; 
+    
+    // 20 Normal Bots
     for (let i = 0; i < 20; i++) {
-        let id = `b_n_${i}`; let spawn = getRandomCellCenter();
-        players[id] = { id, name: getRandomName(""), x: spawn.x, y: spawn.y, angle: Math.random()*6, health: 5, isBot: true, isHard: false, lastShot: 0, vx: 2, vy: 0 };
+        let id = `bot_normal_${i}`; 
+        let spawn = getRandomCellCenter();
+        players[id] = { 
+            id, name: getRandomName(""), 
+            x: spawn.x, y: spawn.y, angle: 0, health: 5, 
+            isBot: true, isHard: false, lastShot: 0, 
+            currentDir: 'e' // Always start with a default directional heading
+        };
     }
+    // 5 Extreme Bots
     for (let i = 0; i < 5; i++) {
-        let id = `b_e_${i}`; let spawn = getRandomCellCenter();
-        players[id] = { id, name: getRandomName("EXTREME_"), x: spawn.x, y: spawn.y, angle: Math.random()*6, health: 5, isBot: true, isHard: true, lastShot: 0, vx: 4, vy: 0 };
+        let id = `bot_extreme_${i}`; 
+        let spawn = getRandomCellCenter();
+        players[id] = { 
+            id, name: getRandomName("EXTREME_"), 
+            x: spawn.x, y: spawn.y, angle: 0, health: 5, 
+            isBot: true, isHard: true, lastShot: 0, 
+            currentDir: 'w'
+        };
     }
 }
 initBots();
 
 function updateGame() {
+    // Projectile Engine updates
     for (let i = bullets.length - 1; i >= 0; i--) {
         let b = bullets[i];
         b.x += b.vx; b.y += b.vy;
@@ -104,7 +125,7 @@ function updateGame() {
 
         for (let pId in players) {
             let p = players[pId];
-            if (pId !== b.ownerId && Math.abs(p.x - b.x) < 16 && Math.abs(p.y - b.y) < 16) {
+            if (pId !== b.ownerId && Math.abs(p.x - b.x) < 18 && Math.abs(p.y - b.y) < 18) {
                 p.health -= 1;
                 bullets.splice(i, 1);
                 if (p.health <= 0) delete players[pId];
@@ -115,55 +136,82 @@ function updateGame() {
 
     let now = Date.now();
     
+    // UNBREAKABLE STEERING ENGINE LOOP
     for (let id in players) {
         let p = players[id];
         if (!p.isBot) continue;
 
-        let speed = p.isHard ? 4.2 : 2.4;
+        let speed = p.isHard ? 4.0 : 2.2;
         let fireCooldown = p.isHard ? 200 : 850;
-        let detectionRange = p.isHard ? 650 : 400;
+        let detectionRange = p.isHard ? 600 : 350;
 
-        // FIXED: First, scan for an enemy that is in range AND has a completely clear vision profile
+        // 1. Scan for closest enemy with clear LOS
         let visibleTarget = null; 
         let minDist = detectionRange;
 
         for (let tId in players) {
             if (tId !== id) {
                 let d = Math.hypot(players[tId].x - p.x, players[tId].y - p.y);
-                if (d < minDist) {
-                    // Check vision BEFORE allowing tracking mechanics
-                    if (hasLineOfSight(p.x, p.y, players[tId].x, players[tId].y)) {
-                        minDist = d;
-                        visibleTarget = players[tId];
-                    }
+                if (d < minDist && hasLineOfSight(p.x, p.y, players[tId].x, players[tId].y)) {
+                    minDist = d;
+                    visibleTarget = players[tId];
                 }
             }
         }
 
+        // 2. Movement Logic (Arcade directional vector handling)
+        let vx = 0, vy = 0;
+
         if (visibleTarget) {
-            // COMBAT STATE: Fires up ONLY when a clean, uninterrupted path to target is verified
+            // COMBAT PURSUIT: Move directly towards open axes of visible enemy
             p.angle = Math.atan2(visibleTarget.y - p.y, visibleTarget.x - p.x);
-            p.vx = Math.cos(p.angle) * speed; 
-            p.vy = Math.sin(p.angle) * speed;
+            
+            // Convert angle to dominant open cardial direction
+            let dx = visibleTarget.x - p.x;
+            let dy = visibleTarget.y - p.y;
+            
+            if (Math.abs(dx) > Math.abs(dy)) {
+                p.currentDir = dx > 0 ? 'e' : 'w';
+            } else {
+                p.currentDir = dy > 0 ? 's' : 'n';
+            }
 
             if (now - p.lastShot > fireCooldown) {
-                bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle, vx: Math.cos(p.angle)*12, vy: Math.sin(p.angle)*12, speed: 12 });
+                bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle, vx: Math.cos(p.angle)*12, vy: Math.sin(p.angle)*12 });
                 p.lastShot = now;
-            }
-        } else {
-            // EXPLORATION PATROL STATE: Continues wandering smoothly through hallways if vision is blocked
-            if ((Math.abs(p.vx) < 0.1 && Math.abs(p.vy) < 0.1) || Math.random() < 0.02) {
-                let rAngle = Math.floor(Math.random() * 4) * (Math.PI / 2);
-                p.vx = Math.cos(rAngle) * speed; 
-                p.vy = Math.sin(rAngle) * speed;
             }
         }
 
-        // Apply robust axis thresholds sliding
-        if (!isWallBlocking(p.x + p.vx, p.y)) p.x += p.vx; else p.vx = -p.vx;
-        if (!isWallBlocking(p.x, p.y + p.vy)) p.y += p.vy; else p.vy = -p.vy;
+        // Apply velocities based on current cardial direction
+        if (p.currentDir === 'n') vy = -speed;
+        if (p.currentDir === 's') vy = speed;
+        if (p.currentDir === 'w') vx = -speed;
+        if (p.currentDir === 'e') vx = speed;
 
-        if (p.vx !== 0 || p.vy !== 0) p.angle = Math.atan2(p.vy, p.vx);
+        // 3. CRITICAL: If path is blocked, auto-calculate alternate direction immediately
+        if (isWallBlocking(p.x + vx, p.y + vy)) {
+            let directions = ['n', 's', 'e', 'w'].sort(() => Math.random() - 0.5);
+            for (let dir of directions) {
+                let testVx = 0, testVy = 0;
+                if (dir === 'n') testVy = -speed;
+                if (dir === 's') testVy = speed;
+                if (dir === 'w') testVx = -speed;
+                if (dir === 'e') testVx = speed;
+
+                if (!isWallBlocking(p.x + testVx, p.y + testVy)) {
+                    p.currentDir = dir;
+                    vx = testVx;
+                    vy = testVy;
+                    break;
+                }
+            }
+        }
+
+        // Apply final safe verified movement steps
+        p.x += vx;
+        p.y += vy;
+
+        if (vx !== 0 || vy !== 0) p.angle = Math.atan2(vy, vx);
     }
 
     io.emit('gameState', { players, bullets });
@@ -186,7 +234,7 @@ io.on('connection', (socket) => {
 
     socket.on('shoot', () => {
         let p = players[socket.id]; if (!p) return;
-        bullets.push({ ownerId: socket.id, x: p.x, y: p.y, angle: p.angle, vx: Math.cos(p.angle)*12, vy: Math.sin(p.angle)*12, speed: 12 });
+        bullets.push({ ownerId: socket.id, x: p.x, y: p.y, angle: p.angle, vx: Math.cos(p.angle)*12, vy: Math.sin(p.angle)*12 });
     });
 
     socket.on('disconnect', () => { delete players[socket.id]; });

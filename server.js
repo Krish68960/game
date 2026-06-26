@@ -19,6 +19,7 @@ let players = {};
 let bullets = [];
 let maze = [];
 let isResettingMatch = false;
+let matchStartTime = 0; // TRACKS GRACE PERIOD RESET
 
 function generateArenaGrid(size) {
     let grid = Array(size).fill(null).map(() => Array(size).fill(null).map(() => ({ n: true, s: true, e: true, w: true })));
@@ -39,7 +40,7 @@ function generateArenaGrid(size) {
     dfs(0, 0);
 
     for (let r = 1; r < size - 1; r++) {
-        for (let c = 1; c < size - 1; c++) {
+        for (let c = 1; r < size - 1 && c < size - 1; c++) {
             if (Math.random() < 0.5) { grid[r][c].n = false; grid[r-1][c].s = false; }
             if (Math.random() < 0.5) { grid[r][c].w = false; grid[r][c-1].e = false; }
         }
@@ -83,49 +84,40 @@ function hasLineOfSight(x0, y0, x1, y1) {
     return true;
 }
 
-// FIXED: Clean isolation engine completely guarantees all 25 load channels stay open
 function startNewMatchRound() {
     isResettingMatch = false;
+    matchStartTime = Date.now(); // Start 3-second grace window clock
     bullets = [];
     maze = generateArenaGrid(MAZE_SIZE);
 
-    // Filter and save real humans safely FIRST
     let currentHumans = {};
     for (let id in players) {
         if (players[id] && !players[id].isBot) {
             let spawn = getRandomCellCenter();
             currentHumans[id] = {
-                id: id,
-                name: players[id].name,
-                x: spawn.x, y: spawn.y, angle: 0, health: 5,
-                isBot: false
+                id: id, name: players[id].name, x: spawn.x, y: spawn.y, angle: 0, health: 5, isBot: false
             };
         }
     }
-    
-    // Hard reset the master object list to only contain our active humans
     players = currentHumans;
 
-    // Hard-forced independent loops that DO NOT share indices or arrays
+    // Hard-load 20 Normal Bots
     for (let i = 0; i < 20; i++) {
-        let botId = `bot_normal_${i}_${Date.now()}`;
+        let botId = `bot_normal_${i}`;
         let spawn = getRandomCellCenter();
         players[botId] = {
-            id: botId,
-            name: getRandomName(""),
-            x: spawn.x, y: spawn.y, angle: 0, health: 5,
+            id: botId, name: getRandomName(""), x: spawn.x, y: spawn.y, angle: 0, health: 5,
             isBot: true, isHard: false, lastShot: 0,
             currentDir: ['n', 's', 'e', 'w'][Math.floor(Math.random() * 4)]
         };
     }
 
+    // Hard-load 5 Extreme Bots
     for (let i = 0; i < 5; i++) {
-        let botId = `bot_extreme_${i}_${Date.now()}`;
+        let botId = `bot_extreme_${i}`;
         let spawn = getRandomCellCenter();
         players[botId] = {
-            id: botId,
-            name: getRandomName("EXTREME_"),
-            x: spawn.x, y: spawn.y, angle: 0, health: 5,
+            id: botId, name: getRandomName("EXTREME_"), x: spawn.x, y: spawn.y, angle: 0, health: 5,
             isBot: true, isHard: true, lastShot: 0,
             currentDir: ['n', 's', 'e', 'w'][Math.floor(Math.random() * 4)]
         };
@@ -134,10 +126,13 @@ function startNewMatchRound() {
     io.emit('newRound', { maze, size: MAZE_SIZE, cellSize: CELL_SIZE });
 }
 
-// Kickstart match immediately
 startNewMatchRound();
 
 function updateGame() {
+    let now = Date.now();
+    let isGracePeriodActive = (now - matchStartTime) < 3000; // 3-second immunity
+
+    // Projectiles
     for (let i = bullets.length - 1; i >= 0; i--) {
         let b = bullets[i];
         b.x += b.vx; b.y += b.vy;
@@ -155,10 +150,10 @@ function updateGame() {
         }
     }
 
-    let now = Date.now();
     let totalAlive = Object.keys(players).length;
 
-    if (totalAlive <= 1 && !isResettingMatch) {
+    // ONLY check win condition if grace period is OVER to let everyone load
+    if (!isGracePeriodActive && totalAlive <= 1 && !isResettingMatch) {
         isResettingMatch = true;
         let lastSurvivorName = totalAlive === 1 ? Object.values(players)[0].name : "NONE";
         io.emit('roundEndingAnnounce', { winner: lastSurvivorName });
@@ -200,7 +195,8 @@ function updateGame() {
                 p.currentDir = dy > 0 ? 's' : 'n';
             }
 
-            if (now - p.lastShot > fireCooldown) {
+            // BOTS CANONLY SHOOT IF GRACE PERIOD IS OVER
+            if (!isGracePeriodActive && (now - p.lastShot > fireCooldown)) {
                 bullets.push({ ownerId: id, x: p.x, y: p.y, angle: p.angle, vx: Math.cos(p.angle)*12, vy: Math.sin(p.angle)*12 });
                 p.lastShot = now;
             }
@@ -221,16 +217,12 @@ function updateGame() {
                 if (dir === 'e') testVx = speed;
 
                 if (!isWallBlocking(p.x + testVx, p.y + testVy)) {
-                    p.currentDir = dir;
-                    vx = testVx;
-                    vy = testVy;
-                    break;
+                    p.currentDir = dir; vx = testVx; vy = testVy; break;
                 }
             }
         }
 
-        p.x += vx;
-        p.y += vy;
+        p.x += vx; p.y += vy;
         if (vx !== 0 || vy !== 0) p.angle = Math.atan2(vy, vx);
     }
 
@@ -254,7 +246,10 @@ io.on('connection', (socket) => {
 
     socket.on('shoot', () => {
         let p = players[socket.id]; if (!p) return;
-        bullets.push({ ownerId: socket.id, x: p.x, y: p.y, angle: p.angle, vx: Math.cos(p.angle)*12, vy: Math.sin(p.angle)*12 });
+        // HUMANS CAN ONLY SHOOT IF GRACE PERIOD IS OVER
+        if ((Date.now() - matchStartTime) >= 3000) {
+            bullets.push({ ownerId: socket.id, x: p.x, y: p.y, angle: p.angle, vx: Math.cos(p.angle)*12, vy: Math.sin(p.angle)*12 });
+        }
     });
 
     socket.on('disconnect', () => { delete players[socket.id]; });
